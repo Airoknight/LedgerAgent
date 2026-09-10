@@ -11,7 +11,8 @@ import {
   Settings, 
   Building2, 
   UserCheck,
-  PlusCircle
+  PlusCircle,
+  BookOpen
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -31,7 +32,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'inbox', label: 'Inbox', icon: Inbox },
     { id: 'uploads', label: 'Uploads', icon: UploadCloud },
     { id: 'exceptions', label: 'Exceptions', icon: AlertTriangle, badge: exceptionCount > 0 ? exceptionCount : null, badgeColor: 'bg-amber-500/20 text-amber-300 border-amber-500/40' },
-    { id: 'transactions', label: 'Transactions', icon: FileSpreadsheet },
+    { id: 'transactions', label: 'Verification Registers', icon: FileSpreadsheet },
+    { id: 'accounting', label: 'Accounting & Ledgers', icon: BookOpen },
     { id: 'reports', label: 'Reports', icon: BarChart3 },
     { id: 'audit', label: 'Audit Trail', icon: ShieldCheck },
   ];

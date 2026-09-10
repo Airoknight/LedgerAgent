@@ -35,12 +35,14 @@ import {
   RefreshCw,
   MessageSquare,
   ChevronDown,
-  Minimize2
+  Minimize2,
+  BookOpen
 } from 'lucide-react';
 import { DocumentItem } from '@/types';
 import { LoginView } from '@/components/auth/LoginView';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { CategorySpreadsheetView } from '@/components/workspace/CategorySpreadsheetView';
+import { AccountingWorkspace } from '@/components/accounting/AccountingWorkspace';
 
 const CATEGORIES_CONFIG = [
   { id: 'invoices', label: 'Invoices', desc: 'Vendor bills & tax invoices', color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200', format: 'Tabular' },
@@ -151,6 +153,7 @@ export default function Home() {
   const [currentFirm, setCurrentFirm] = useState<any>(null);
   const [csrfToken, setCsrfToken] = useState<string>('');
 
+  const [activeNav, setActiveNav] = useState<'workspace' | 'accounting'>('workspace');
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [selectedDoc, setSelectedDoc] = useState<DocumentItem | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -740,19 +743,55 @@ export default function Home() {
             </button>
           </div>
 
-          {/* Simple Navigation: Just Uploads */}
+          {/* Navigation Controls */}
           <div className="space-y-1">
             <button 
-              onClick={() => setShowAllUploadsModal(true)}
-              className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold bg-slate-100 text-slate-900 hover:bg-slate-200/70 transition-colors"
+              onClick={() => setActiveNav('workspace')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                activeNav === 'workspace'
+                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-200'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
             >
               <div className="flex items-center gap-2.5">
-                <UploadCloud className="w-4 h-4 text-slate-700" />
-                <span>Uploads</span>
+                <Layers className={`w-4 h-4 ${activeNav === 'workspace' ? 'text-white' : 'text-slate-500'}`} />
+                <span>Workspace & Ingestion</span>
               </div>
-              <span className="text-[10px] bg-white border border-slate-200 px-1.5 py-0.2 rounded-md font-mono text-slate-600">
+              <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono ${
+                activeNav === 'workspace' ? 'bg-blue-500 text-white' : 'bg-slate-100 border border-slate-200 text-slate-600'
+              }`}>
                 {documents.length}
               </span>
+            </button>
+
+            <button 
+              onClick={() => setActiveNav('accounting')}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
+                activeNav === 'accounting'
+                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-200'
+                  : 'text-slate-600 hover:bg-slate-100'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <BookOpen className={`w-4 h-4 ${activeNav === 'accounting' ? 'text-white' : 'text-indigo-500'}`} />
+                <span>Accounting & Ledgers</span>
+              </div>
+              <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
+                activeNav === 'accounting' ? 'bg-indigo-500 text-white' : 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
+              }`}>
+                CA Engine
+              </span>
+            </button>
+
+            <button 
+              onClick={() => setShowAllUploadsModal(true)}
+              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+            >
+              <div className="flex items-center gap-2.5">
+                <UploadCloud className="w-4 h-4 text-slate-400" />
+                <span>All Documents Modal</span>
+              </div>
+              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
             </button>
           </div>
 
@@ -826,8 +865,11 @@ export default function Home() {
         </div>
       </aside>
 
-      {/* 2. MAIN WORKSPACE CANVAS (Matching Screenshot Exactly) */}
-      <main className="flex-1 flex flex-col h-full overflow-y-auto px-10 pt-8 pb-24 relative">
+      {/* 2. MAIN WORKSPACE CANVAS OR ACCOUNTING WORKSPACE */}
+      {activeNav === 'accounting' ? (
+        <AccountingWorkspace csrfToken={csrfToken} />
+      ) : (
+        <main className="flex-1 flex flex-col h-full overflow-y-auto px-10 pt-8 pb-24 relative">
         <div className="max-w-4xl mx-auto w-full space-y-6">
           {/* Greeting Banner */}
           <div>
@@ -1517,6 +1559,7 @@ export default function Home() {
         </div>
 
       </main>
+      )}
 
       {/* 4. SLIDE-OVER EXTRACTION DRAWER (When a Document is Clicked) */}
       {selectedDoc && (

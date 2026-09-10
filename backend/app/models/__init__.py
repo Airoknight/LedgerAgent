@@ -21,6 +21,11 @@ from app.models.registers import (
     BankTransaction,
     OtherDocument,
 )
+from app.models.accounting import (
+    Account,
+    JournalEntry,
+    JournalLine,
+)
 
 __all__ = [
     "Base",
@@ -43,6 +48,9 @@ __all__ = [
     "BankStatement",
     "BankTransaction",
     "OtherDocument",
+    "Account",
+    "JournalEntry",
+    "JournalLine",
     # Backward compatibility
     "Organization",
     "BusinessAccount",
