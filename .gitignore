@@ -1,0 +1,85 @@
+# ============================================
+# LedgerAgent — Root .gitignore
+# ============================================
+
+# ---- Environment & Secrets ----
+.env
+.env.local
+.env.*.local
+
+# ---- Databases (SQLite) ----
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ---- Uploaded Documents & Local Storage ----
+storage_local/
+
+# ---- Sample Inputs & Large Binaries ----
+inputs types/
+
+# ---- OS Files ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# ============================================
+# Python / Backend
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+wheels/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ============================================
+# Node / Frontend
+# ============================================
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Misc build artifacts
+test.css
+
+# ============================================
+# IDE & Editor
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ============================================
+# Docker
+# ============================================
+docker-compose.override.yml
