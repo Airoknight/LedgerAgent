@@ -17,6 +17,7 @@ import {
   FileCode
 } from 'lucide-react';
 import { DocumentItem } from '@/types';
+import { API_BASE_URL } from '@/config/api';
 
 interface SplitDocumentViewerProps {
   document: DocumentItem;
@@ -40,7 +41,7 @@ export const SplitDocumentViewer: React.FC<SplitDocumentViewerProps> = ({
   const data = document.extracted_data || {};
   const isNeedsReview = document.status === 'needs_review';
   const isApproved = document.review_status === 'approved_by_ca';
-  const fileUrl = `http://localhost:8000/api/v1/documents/${document.id}/file`;
+  const fileUrl = `${API_BASE_URL}/api/v1/documents/${document.id}/file`;
 
   const handleStartEdit = (field: string, currentVal: any) => {
     setEditingField(field);

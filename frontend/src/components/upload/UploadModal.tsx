@@ -12,6 +12,7 @@ import {
   Archive,
   Layers
 } from 'lucide-react';
+import { API_BASE_URL } from '@/config/api';
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -77,7 +78,7 @@ export const UploadModal: React.FC<UploadModalProps> = ({
         formData.append('intake_message', intakeMessage);
       }
 
-      const res = await fetch('http://localhost:8000/api/v1/intake/upload', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/intake/upload`, {
         method: 'POST',
         body: formData,
       });

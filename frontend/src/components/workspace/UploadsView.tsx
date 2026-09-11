@@ -21,6 +21,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { DocumentItem } from '@/types';
+import { API_BASE_URL } from '@/config/api';
 
 interface UploadsViewProps {
   documents: DocumentItem[];
@@ -81,7 +82,7 @@ export const UploadsView: React.FC<UploadsViewProps> = ({
         formData.append('intake_message', intakeNote);
       }
 
-      const res = await fetch('http://localhost:8000/api/v1/intake/upload', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/intake/upload`, {
         method: 'POST',
         body: formData,
       });
@@ -109,7 +110,7 @@ export const UploadsView: React.FC<UploadsViewProps> = ({
   const handleDeleteDoc = async (docId: string) => {
     setIsDeleting(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/documents/${docId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/v1/documents/${docId}`, {
         method: 'DELETE',
       });
       if (res.ok) {
@@ -297,7 +298,7 @@ export const UploadsView: React.FC<UploadsViewProps> = ({
                             <span>View Details</span>
                           </button>
                           <a
-                            href={`http://localhost:8000/api/v1/documents/${doc.id}/file`}
+                            href={`${API_BASE_URL}/api/v1/documents/${doc.id}/file`}
                             target="_blank"
                             rel="noreferrer"
                             onClick={() => setActiveMenuDocId(null)}

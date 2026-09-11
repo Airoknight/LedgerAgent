@@ -15,6 +15,7 @@ import {
   Layers
 } from 'lucide-react';
 import { ChatMessage, WorkspaceTab } from '@/types';
+import { API_BASE_URL } from '@/config/api';
 
 interface AssistantBarProps {
   activeTab: WorkspaceTab | undefined;
@@ -85,7 +86,7 @@ export const AssistantBar: React.FC<AssistantBarProps> = ({
     setIsThinking(true);
 
     try {
-      const res = await fetch('http://localhost:8000/api/v1/chat/query', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/chat/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

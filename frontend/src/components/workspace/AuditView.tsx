@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { ShieldCheck, CheckCircle2, AlertTriangle, RefreshCw, Download, Lock, Check } from 'lucide-react';
+import { API_BASE_URL } from '@/config/api';
 
 interface AuditEventItem {
   id: string;
@@ -39,7 +40,7 @@ export const AuditView: React.FC<AuditViewProps> = ({ csrfToken }) => {
   const fetchEvents = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/api/v1/audit/events?limit=100', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/audit/events?limit=100`, {
         credentials: 'include',
       });
       if (res.ok) {
@@ -56,7 +57,7 @@ export const AuditView: React.FC<AuditViewProps> = ({ csrfToken }) => {
   const handleVerifyChain = async () => {
     setIsVerifying(true);
     try {
-      const res = await fetch('http://localhost:8000/api/v1/audit/verify-chain', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/audit/verify-chain`, {
         credentials: 'include',
       });
       if (res.ok) {
@@ -102,7 +103,7 @@ export const AuditView: React.FC<AuditViewProps> = ({ csrfToken }) => {
             </button>
 
             <a
-              href="http://localhost:8000/api/v1/reports/export/csv"
+              href={`${API_BASE_URL}/api/v1/reports/export/csv`}
               download
               className="flex items-center gap-1.5 px-3.5 py-1.5 bg-white border border-[#D9E0E7] hover:bg-[#F8FAFC] text-[#17202A] rounded-[6px] text-xs font-medium transition-colors"
             >

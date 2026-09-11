@@ -47,6 +47,7 @@ import { AccountingWorkspace } from '@/components/accounting/AccountingWorkspace
 import { AuditView } from '@/components/workspace/AuditView';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { TopBar } from '@/components/layout/TopBar';
+import { API_BASE_URL } from '@/config/api';
 
 const CATEGORIES_CONFIG = [
   { id: 'invoices', label: 'Invoices', desc: 'Vendor bills & tax invoices', color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200', format: 'Tabular' },
@@ -303,7 +304,7 @@ export default function Home() {
     if (!reviewModalDoc) return;
     setIsPostingToPipeline(true);
     try {
-      const res = await fetch('http://localhost:8000/api/v1/accounting/confirm-intake', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/accounting/confirm-intake`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -423,7 +424,7 @@ export default function Home() {
 
   const fetchDocs = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/v1/documents', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/documents`, {
         credentials: 'include',
       });
       if (res.ok) {
@@ -455,7 +456,7 @@ export default function Home() {
 
   const handleScanDuplicates = async () => {
     try {
-      const res = await fetch('http://localhost:8000/api/v1/documents/scan-duplicates', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/documents/scan-duplicates`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'X-CSRF-Token': csrfToken },
@@ -476,7 +477,7 @@ export default function Home() {
 
   const handleResolveDuplicate = async (docId: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/documents/${docId}/resolve-duplicate`, {
+      const res = await fetch(`${API_BASE_URL}/api/v1/documents/${docId}/resolve-duplicate`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'X-CSRF-Token': csrfToken },
@@ -507,7 +508,7 @@ export default function Home() {
   const checkAuth = async () => {
     setAuthLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/api/v1/auth/me', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/auth/me`, {
         credentials: 'include',
       });
       if (res.ok) {
@@ -612,7 +613,7 @@ export default function Home() {
       const formData = new FormData();
       files.forEach(f => formData.append('files', f));
 
-      const res = await fetch('http://localhost:8000/api/v1/intake/upload', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/intake/upload`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -695,7 +696,7 @@ export default function Home() {
     setIsChatOpen(true);
 
     try {
-      const res = await fetch('http://localhost:8000/api/v1/chat/query', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/chat/query`, {
         method: 'POST',
         credentials: 'include',
         headers: { 
@@ -740,7 +741,7 @@ export default function Home() {
 
   const handleApprove = async (docId: string) => {
     try {
-      await fetch(`http://localhost:8000/api/v1/documents/${docId}/approve`, { 
+      await fetch(`${API_BASE_URL}/api/v1/documents/${docId}/approve`, { 
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -772,7 +773,7 @@ export default function Home() {
 
   const handleLogout = async () => {
     try {
-      await fetch('http://localhost:8000/api/v1/auth/logout', {
+      await fetch(`${API_BASE_URL}/api/v1/auth/logout`, {
         method: 'POST',
         credentials: 'include',
         headers: {
@@ -804,7 +805,7 @@ export default function Home() {
   const handleDeleteDoc = async (docId: string) => {
     setIsDeleting(true);
     try {
-      const res = await fetch(`http://localhost:8000/api/v1/documents/${docId}`, {
+      const res = await fetch(`${API_BASE_URL}/api/v1/documents/${docId}`, {
         method: 'DELETE',
         credentials: 'include',
         headers: {
@@ -863,7 +864,7 @@ export default function Home() {
             <span>View Extraction</span>
           </button>
           <a
-            href={`http://localhost:8000/api/v1/documents/${doc.id}/file`}
+            href={`${API_BASE_URL}/api/v1/documents/${doc.id}/file`}
             target="_blank"
             rel="noreferrer"
             onClick={() => setOpenMenuDocId(null)}

@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Lock, Mail, ShieldCheck, ArrowRight, AlertCircle, Building2 } from 'lucide-react';
+import { API_BASE_URL } from '@/config/api';
 
 interface LoginViewProps {
   onLoginSuccess: (user: any, firm: any, csrfToken: string) => void;
@@ -24,7 +25,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     setErrorMsg(null);
 
     try {
-      const res = await fetch('http://localhost:8000/api/v1/auth/login', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
