@@ -17,6 +17,8 @@
 
 # ---- Uploaded Documents & Local Storage ----
 storage_local/
+storage/
+backend/storage/
 
 # ---- Sample Inputs & Large Binaries ----
 inputs types/

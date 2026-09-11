@@ -5,6 +5,8 @@ class LoginRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
     email: str
     password: str
+    totp_code: Optional[str] = None
+    recovery_code: Optional[str] = None
 
 class LoginResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -53,3 +55,32 @@ class UserProfile(BaseModel):
     role: str
     organization_id: Optional[str] = None
     firm_id: Optional[str] = "default_firm"
+    mfa_enabled: bool = False
+
+# New Security & Auth Schemas
+class MfaSetupResponse(BaseModel):
+    secret: str
+    otpauth_url: str
+    recovery_codes: list[str]
+
+class MfaVerifyRequest(BaseModel):
+    code: str
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+class SessionItem(BaseModel):
+    id: str
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    created_at: str
+    expires_at: str
+    is_current: bool = False

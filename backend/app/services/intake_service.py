@@ -208,6 +208,9 @@ def parse_extracted_invoice_fields(text: str, filename: str) -> Dict[str, Any]:
         ]
     }
 
+from fastapi import HTTPException
+from app.services.upload_guard import validate_uploaded_document
+
 def process_file_intake(
     file_bytes: bytes,
     original_filename: str,
@@ -217,10 +220,32 @@ def process_file_intake(
     intake_message: str | None,
     db: Session
 ) -> Tuple[Document, bool, str | None]:
-    ext = os.path.splitext(original_filename)[1].lower()
-    mime_type = SUPPORTED_EXTENSIONS.get(ext, "application/octet-stream")
+    # 0. Upload Gateway Validation (Size, signature, malware, macro, formula injection defense)
+    upload_res = validate_uploaded_document(file_bytes, original_filename)
+    if not upload_res.is_valid:
+        if upload_res.is_malicious:
+            # Quarantine hostile file
+            q_key = f"quarantine_{uuid.uuid4().hex[:12]}_{upload_res.sanitized_filename}"
+            storage.save_bytes(file_bytes, q_key, "quarantine")
+            audit = AuditEvent(
+                organization_id=organization_id,
+                action="security.malware_detected",
+                entity_type="document",
+                entity_id=q_key,
+                actor_name="UploadGuard",
+                details={"filename": original_filename, "reason": upload_res.rejection_reason, "hash": upload_res.file_hash}
+            )
+            db.add(audit)
+            db.commit()
+            raise HTTPException(status_code=400, detail=f"Upload rejected: {upload_res.rejection_reason}")
+        else:
+            raise HTTPException(status_code=400, detail=f"Upload validation failed: {upload_res.rejection_reason}")
 
-    storage_key = f"{uuid.uuid4().hex[:12]}_{original_filename}"
+    sanitized_filename = upload_res.sanitized_filename
+    ext = os.path.splitext(sanitized_filename)[1].lower()
+    mime_type = upload_res.detected_mime
+
+    storage_key = f"{uuid.uuid4().hex[:12]}_{sanitized_filename}"
     _, file_hash, file_size = storage.save_bytes(file_bytes, storage_key, "originals")
 
     existing = db.query(Document).filter(

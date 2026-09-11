@@ -10,6 +10,7 @@ from app.models.exception import FinancialException
 from app.models.validation_exception import ValidationException
 from app.models.audit import AuditEvent
 from app.models.setting import Setting
+from app.models.queue import ProcessingJob, StageHistory
 from app.core.security import get_password_hash
 
 def run_migrations(db_engine):
@@ -25,6 +26,19 @@ def run_migrations(db_engine):
                 conn.exec_driver_sql("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER DEFAULT 0")
             if "locked_until" not in cols:
                 conn.exec_driver_sql("ALTER TABLE users ADD COLUMN locked_until DATETIME")
+            if "mfa_enabled" not in cols:
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN mfa_enabled BOOLEAN DEFAULT 0")
+            if "mfa_secret" not in cols:
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN mfa_secret VARCHAR")
+            if "mfa_recovery_codes_json" not in cols:
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN mfa_recovery_codes_json TEXT DEFAULT '[]'")
+
+        # Check business_accounts table
+        res_biz = conn.exec_driver_sql("PRAGMA table_info(business_accounts)").fetchall()
+        cols_biz = [r[1] for r in res_biz]
+        if cols_biz:
+            if "firm_id" not in cols_biz:
+                conn.exec_driver_sql("ALTER TABLE business_accounts ADD COLUMN firm_id VARCHAR DEFAULT 'default_firm'")
 
         # Check documents table
         res = conn.exec_driver_sql("PRAGMA table_info(documents)").fetchall()
@@ -50,6 +64,20 @@ def run_migrations(db_engine):
         if cols:
             if "firm_id" not in cols:
                 conn.exec_driver_sql("ALTER TABLE audit_events ADD COLUMN firm_id VARCHAR")
+            if "client_id" not in cols:
+                conn.exec_driver_sql("ALTER TABLE audit_events ADD COLUMN client_id VARCHAR")
+            if "request_id" not in cols:
+                conn.exec_driver_sql("ALTER TABLE audit_events ADD COLUMN request_id VARCHAR")
+            if "source_ip" not in cols:
+                conn.exec_driver_sql("ALTER TABLE audit_events ADD COLUMN source_ip VARCHAR")
+            if "user_agent" not in cols:
+                conn.exec_driver_sql("ALTER TABLE audit_events ADD COLUMN user_agent VARCHAR")
+            if "reason" not in cols:
+                conn.exec_driver_sql("ALTER TABLE audit_events ADD COLUMN reason VARCHAR")
+            if "previous_event_hash" not in cols:
+                conn.exec_driver_sql("ALTER TABLE audit_events ADD COLUMN previous_event_hash VARCHAR")
+            if "event_hash" not in cols:
+                conn.exec_driver_sql("ALTER TABLE audit_events ADD COLUMN event_hash VARCHAR")
 
         # Check financial_exceptions table
         res = conn.exec_driver_sql("PRAGMA table_info(financial_exceptions)").fetchall()

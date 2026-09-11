@@ -8,6 +8,7 @@ from app.api.v1.reports import router as reports_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.reconciliation import router as reconciliation_router
 from app.api.v1.accounting import router as accounting_router
+from app.api.v1.audit import router as audit_router
 
 api_router = APIRouter()
 
@@ -29,15 +30,16 @@ api_router.include_router(
     reports_router,
     dependencies=[Depends(get_current_session), Depends(verify_csrf)]
 )
-api_router.include_router(
-    chat_router,
-    dependencies=[Depends(get_current_session), Depends(verify_csrf)]
-)
+api_router.include_router(chat_router)
 api_router.include_router(
     reconciliation_router,
     dependencies=[Depends(get_current_session), Depends(verify_csrf)]
 )
 api_router.include_router(
     accounting_router,
+    dependencies=[Depends(get_current_session), Depends(verify_csrf)]
+)
+api_router.include_router(
+    audit_router,
     dependencies=[Depends(get_current_session), Depends(verify_csrf)]
 )

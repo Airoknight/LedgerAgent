@@ -5,6 +5,7 @@ class ChatQueryRequest(BaseModel):
     query: str
     active_tab_id: Optional[str] = None
     active_context: Optional[Dict[str, Any]] = None  # e.g. {"doc_id": "...", "doc_type": "purchase_invoice"}
+    history: Optional[List[Dict[str, str]]] = None
 
 class ChatQueryResponse(BaseModel):
     answer: str

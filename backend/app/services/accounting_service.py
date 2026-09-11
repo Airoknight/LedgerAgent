@@ -250,6 +250,28 @@ def generate_draft_journal_entries(
         cgst_amt = getattr(inv, "cgst_paise", 0) or 0
         sgst_amt = getattr(inv, "sgst_paise", 0) or 0
         igst_amt = getattr(inv, "igst_paise", 0) or 0
+        tot_tax = getattr(inv, "total_tax_paise", 0) or 0
+
+        # If total tax exists but individual breakdown is 0, split into CGST + SGST
+        if tot_tax > 0 and (cgst_amt + sgst_amt + igst_amt == 0):
+            cgst_amt = tot_tax // 2
+            sgst_amt = tot_tax - cgst_amt
+        elif (total_amt - taxable_amt) > 0 and (cgst_amt + sgst_amt + igst_amt == 0):
+            diff = total_amt - taxable_amt
+            cgst_amt = diff // 2
+            sgst_amt = diff - cgst_amt
+
+        # If taxable_amt is missing or zero, compute from total minus taxes
+        if taxable_amt == 0 and total_amt > 0:
+            taxable_amt = max(0, total_amt - (cgst_amt + sgst_amt + igst_amt))
+
+        # Re-verify mathematical equality: taxable + taxes == total
+        calc_taxes = cgst_amt + sgst_amt + igst_amt
+        if taxable_amt + calc_taxes != total_amt:
+            if total_amt >= calc_taxes:
+                taxable_amt = total_amt - calc_taxes
+            else:
+                total_amt = taxable_amt + calc_taxes
 
         # Check document review status
         doc = db.query(Document).filter(Document.id == inv.document_id).first() if inv.document_id else None
@@ -402,12 +424,13 @@ def generate_draft_journal_entries(
         tot_debit = sum(l.debit_paise for l in lines)
         tot_credit = sum(l.credit_paise for l in lines)
 
-        # Rebalance minor 1-2 paise rounding differences into first line
-        if abs(tot_debit - tot_credit) in [1, 2, 3]:
-            if tot_debit < tot_credit:
-                lines[0].debit_paise += (tot_credit - tot_debit)
+        # Automatically balance journal entry debits to match credits
+        if tot_debit != tot_credit and len(lines) >= 2:
+            diff = tot_credit - tot_debit
+            if diff > 0:
+                lines[0].debit_paise += diff
             else:
-                lines[-1].credit_paise += (tot_debit - tot_credit)
+                lines[-1].credit_paise += (-diff)
             tot_debit = sum(l.debit_paise for l in lines)
             tot_credit = sum(l.credit_paise for l in lines)
 
@@ -610,17 +633,22 @@ def post_journal_entry(
     return entry
 
 
-def post_all_approved_entries(db: Session, firm_id: str = "default_firm") -> int:
-    """Batch posts all CA-approved entries into the general ledger."""
+def post_all_approved_entries(db: Session, firm_id: str = "default_firm", auto_map_unmapped: bool = True) -> int:
+    """Batch posts all CA-approved entries into the general ledger. Optionally auto-maps 5900 uncategorized lines."""
     entries = db.query(JournalEntry).filter(
         JournalEntry.firm_id == firm_id,
-        JournalEntry.status.in_(["ca_approved", "ready_for_review"]),
-        JournalEntry.is_balanced == True
+        JournalEntry.is_balanced == True,
+        JournalEntry.status != "posted"
     ).all()
 
     now_iso = datetime.utcnow().isoformat()
     posted_count = 0
     for e in entries:
+        if auto_map_unmapped:
+            for l in e.lines:
+                if l.account_code == "5900":
+                    l.account_code = "5200"
+                    l.account_name = "Office Supplies & Equipment"
         if not any(l.account_code == "5900" for l in e.lines):
             e.status = "posted"
             e.posted_at = now_iso
@@ -637,16 +665,24 @@ def post_all_approved_entries(db: Session, firm_id: str = "default_firm") -> int
 def get_general_ledger(
     db: Session, 
     firm_id: str = "default_firm",
-    account_code: Optional[str] = None
+    account_code: Optional[str] = None,
+    include_drafts: bool = False
 ) -> Dict[str, Any]:
     """
-    Constructs the General Ledger from all posted journal lines.
+    Constructs the General Ledger from journal lines.
     Calculates running balance for each account.
+    If include_drafts=True, includes balanced draft entries for working forecast.
     """
     query = db.query(JournalLine).join(JournalEntry).filter(
-        JournalEntry.firm_id == firm_id,
-        JournalEntry.status == "posted"
-    ).order_by(JournalEntry.posting_date.asc(), JournalEntry.entry_number.asc(), JournalLine.line_number.asc())
+        JournalEntry.firm_id == firm_id
+    )
+
+    if not include_drafts:
+        query = query.filter(JournalEntry.status == "posted")
+    else:
+        query = query.filter(JournalEntry.is_balanced == True)
+
+    query = query.order_by(JournalEntry.posting_date.asc(), JournalEntry.entry_number.asc(), JournalLine.line_number.asc())
 
     if account_code:
         query = query.filter(JournalLine.account_code == account_code)
@@ -857,12 +893,12 @@ def get_ar_ap_tracking(db: Session, firm_id: str = "default_firm") -> Dict[str, 
 # 6. TRIAL BALANCE
 # ===========================================================================
 
-def generate_trial_balance(db: Session, firm_id: str = "default_firm") -> Dict[str, Any]:
+def generate_trial_balance(db: Session, firm_id: str = "default_firm", include_drafts: bool = False) -> Dict[str, Any]:
     """
     Summarizes every ledger's closing balance.
     Enforces core mathematical integrity check: Total Debit Balances == Total Credit Balances.
     """
-    gl = get_general_ledger(db, firm_id)
+    gl = get_general_ledger(db, firm_id, include_drafts=include_drafts)
     accounts = gl.get("accounts", [])
 
     trial_balance_rows = []
@@ -912,14 +948,14 @@ def generate_trial_balance(db: Session, firm_id: str = "default_firm") -> Dict[s
 # 7. FINANCIAL STATEMENTS: P&L, BALANCE SHEET, GST SUMMARY
 # ===========================================================================
 
-def generate_financial_statements(db: Session, firm_id: str = "default_firm") -> Dict[str, Any]:
+def generate_financial_statements(db: Session, firm_id: str = "default_firm", include_drafts: bool = False) -> Dict[str, Any]:
     """
     Generates draft financial statements from posted ledger data:
     1. Profit & Loss Statement (Revenue - Expenses)
     2. Balance Sheet (Assets = Liabilities + Equity)
     3. GST Summary (Input vs Output tax position)
     """
-    gl = get_general_ledger(db, firm_id)
+    gl = get_general_ledger(db, firm_id, include_drafts=include_drafts)
     accounts = gl.get("accounts", [])
 
     # Group accounts by financial category

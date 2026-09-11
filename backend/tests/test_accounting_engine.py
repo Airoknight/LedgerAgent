@@ -366,3 +366,67 @@ def test_remap_journal_line_and_status_progression(test_db):
     # 4. Final posting succeeds
     posted = post_journal_entry(test_db, "je_remap_test")
     assert posted.status == "posted"
+
+
+def test_confirm_intake_workflow(test_db):
+    """Test auto-review intake confirmation and posting into accounting pipeline."""
+    ensure_chart_of_accounts(test_db, firm_id="default_firm")
+
+    # Create an uploaded document
+    import json
+    doc = Document(
+        id="doc_intake_test",
+        firm_id="default_firm",
+        storage_key="test/server_invoice.pdf",
+        original_filename="server_invoice.pdf",
+        file_hash="dummy_hash",
+        file_size=1024,
+        mime_type="application/pdf",
+        status="extracted",
+        review_status="pending_review",
+        document_type="purchase_invoice",
+        extracted_data_json=json.dumps({"total": 5000, "vendor_name": "AWS Inc"})
+    )
+    test_db.add(doc)
+    test_db.commit()
+
+    # Simulate confirm-intake logic
+    from app.api.v1.accounting import confirm_intake_and_post, ConfirmIntakeRequest
+    req = ConfirmIntakeRequest(
+        document_id="doc_intake_test",
+        invoice_number="AWS-2026-009",
+        date="2026-09-11",
+        party_name="Amazon Web Services Inc",
+        subtotal=10000.0,
+        tax=1800.0,
+        total=11800.0,
+        target_account_code="5100"
+    )
+
+    # Call the confirm intake endpoint handler directly
+    res = confirm_intake_and_post(req, firm_id="default_firm", db=test_db)
+    assert res["status"] == "success"
+    assert res["posted"] is True
+
+    # Verify Journal Entry
+    je = test_db.query(JournalEntry).filter(JournalEntry.document_id == "doc_intake_test").first()
+    assert je is not None
+    assert je.status == "posted"
+    assert je.is_balanced is True
+    assert je.total_debit_paise == 1180000
+    assert je.total_credit_paise == 1180000
+
+    # Verify line accounts: Line for Cloud Hosting (5100), Input Tax Credit (1300/1310), AP (2000)
+    lines_by_code = {l.account_code: l for l in je.lines}
+    assert "5100" in lines_by_code
+    assert lines_by_code["5100"].debit_paise == 1000000
+    assert "2000" in lines_by_code
+    assert lines_by_code["2000"].credit_paise == 1180000
+
+    # Verify Trial Balance equilibrium
+    tb = generate_trial_balance(test_db, "default_firm", include_drafts=False)
+    assert tb["is_balanced"] is True
+    assert tb["total_debit"] == "11800.00"
+    assert tb["total_credit"] == "11800.00"
+
+

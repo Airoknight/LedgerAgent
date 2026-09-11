@@ -3,29 +3,192 @@
 @tailwind utilities;
 
 :root {
-  --background: #f8f9fb;
-  --foreground: #1e293b;
+  /* Surfaces */
+  --color-bg: #F5F7FA;
+  --color-surface: #FFFFFF;
+  --color-surface-subtle: #F8FAFC;
+  --color-surface-selected: #EAF1F8;
+
+  /* Sidebar */
+  --color-sidebar: #172332;
+  --color-sidebar-hover: #223247;
+  --color-sidebar-active: #2D425C;
+  --color-sidebar-text: #DCE5EF;
+  --color-sidebar-muted: #94A3B8;
+
+  /* Text */
+  --color-text-primary: #17202A;
+  --color-text-secondary: #4B5563;
+  --color-text-muted: #6B7280;
+  --color-text-disabled: #9CA3AF;
+  --color-text-inverse: #FFFFFF;
+
+  /* Primary Blue */
+  --color-primary: #1F5D8F;
+  --color-primary-hover: #174A73;
+  --color-primary-subtle: #E8F1F8;
+  --color-primary-border: #A8C6DC;
+
+  /* Borders & Focus */
+  --color-border: #D9E0E7;
+  --color-border-strong: #B8C2CC;
+  --color-focus: #2563EB;
+
+  /* Success (Green) */
+  --color-success: #237A57;
+  --color-success-bg: #E8F5EE;
+  --color-success-border: #A8D8C1;
+
+  /* Warning (Amber) */
+  --color-warning: #9A6700;
+  --color-warning-bg: #FFF5D6;
+  --color-warning-border: #E7CA75;
+
+  /* Danger (Red) */
+  --color-danger: #B33A3A;
+  --color-danger-bg: #FDECEC;
+  --color-danger-border: #E8AAAA;
+
+  /* Info (Blue) */
+  --color-info: #336A92;
+  --color-info-bg: #EAF3FA;
+  --color-info-border: #B6D2E5;
+
+  /* Compatibility bindings */
+  --background: var(--color-bg);
+  --foreground: var(--color-text-primary);
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: var(--color-text-primary);
+  background: var(--color-bg);
+  font-family: Inter, "IBM Plex Sans", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom scrollbars */
+/* Typography Scale */
+h1, .text-page-title {
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 650;
+  color: var(--color-text-primary);
+}
+
+h2, .text-section-title {
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+h3, .text-card-title {
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* Numeric & Financial Formatting */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.table-header {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background-color: var(--color-surface-subtle);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.table-cell {
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 400;
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Accounting Status Badges */
+.badge-passed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background-color: var(--color-success-bg);
+  color: var(--color-success);
+  border: 1px solid var(--color-success-border);
+}
+
+.badge-review {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background-color: var(--color-warning-bg);
+  color: var(--color-warning);
+  border: 1px solid var(--color-warning-border);
+}
+
+.badge-failed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background-color: var(--color-danger-bg);
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger-border);
+}
+
+.badge-info {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  background-color: var(--color-info-bg);
+  color: var(--color-info);
+  border: 1px solid var(--color-info-border);
+}
+
+.badge-neutral {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background-color: #EEF2F6;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+/* Restrained Custom Scrollbars */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 4px;
+  background: #C4CDD5;
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: #94A3B8;
 }

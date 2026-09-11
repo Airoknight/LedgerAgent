@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   UploadCloud, 
   FileText, 
@@ -36,13 +36,17 @@ import {
   MessageSquare,
   ChevronDown,
   Minimize2,
-  BookOpen
+  BookOpen,
+  ShieldCheck
 } from 'lucide-react';
 import { DocumentItem } from '@/types';
 import { LoginView } from '@/components/auth/LoginView';
 import { MarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { CategorySpreadsheetView } from '@/components/workspace/CategorySpreadsheetView';
 import { AccountingWorkspace } from '@/components/accounting/AccountingWorkspace';
+import { AuditView } from '@/components/workspace/AuditView';
+import { Sidebar } from '@/components/layout/Sidebar';
+import { TopBar } from '@/components/layout/TopBar';
 
 const CATEGORIES_CONFIG = [
   { id: 'invoices', label: 'Invoices', desc: 'Vendor bills & tax invoices', color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200', format: 'Tabular' },
@@ -153,8 +157,50 @@ export default function Home() {
   const [currentFirm, setCurrentFirm] = useState<any>(null);
   const [csrfToken, setCsrfToken] = useState<string>('');
 
-  const [activeNav, setActiveNav] = useState<'workspace' | 'accounting'>('workspace');
+  const [activeNav, setActiveNav] = useState<string>('workspace');
+  const [accountingSubTab, setAccountingSubTab] = useState<'journals' | 'trial_balance' | 'statements' | 'ar_ap' | 'coa'>('journals');
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+
+  const handleNavSelect = (view: string) => {
+    if (view === 'accounting_journals') {
+      setActiveNav('accounting');
+      setAccountingSubTab('journals');
+      setSelectedCategoryFilter(null);
+    } else if (view === 'accounting_ledger') {
+      setActiveNav('accounting');
+      setAccountingSubTab('journals');
+      setSelectedCategoryFilter(null);
+    } else if (view === 'accounting_trial_balance') {
+      setActiveNav('accounting');
+      setAccountingSubTab('trial_balance');
+      setSelectedCategoryFilter(null);
+    } else if (view === 'accounting_ar_ap') {
+      setActiveNav('accounting');
+      setAccountingSubTab('ar_ap');
+      setSelectedCategoryFilter(null);
+    } else {
+      setActiveNav(view);
+      if (view === 'workspace' || view === 'all_documents') {
+        setSelectedCategoryFilter(null);
+      } else if (view === 'cat_invoices') {
+        setSelectedCategoryFilter('invoices');
+      } else if (view === 'cat_sales') {
+        setSelectedCategoryFilter('sales_records');
+      } else if (view === 'cat_purchases') {
+        setSelectedCategoryFilter('purchase_records');
+      } else if (view === 'cat_receipts') {
+        setSelectedCategoryFilter('receipts');
+      } else if (view === 'cat_bank') {
+        setSelectedCategoryFilter('bank_statements');
+      } else if (view === 'exceptions') {
+        setSelectedCategoryFilter('needs_review');
+      } else if (view === 'upload_intake') {
+        fileInputRef.current?.click();
+      } else if (view === 'settings') {
+        setShowToast('Security Policies: PBKDF2-SHA256, RBAC, tenant isolation, and encrypted storage are active.');
+      }
+    }
+  };
   const [selectedDoc, setSelectedDoc] = useState<DocumentItem | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -212,6 +258,162 @@ export default function Home() {
   const [stepSubtext, setStepSubtext] = useState<string>('Reading file bytes and computing SHA-256 ledger integrity...');
   const [uploadSeconds, setUploadSeconds] = useState<number>(0);
   const progressTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Intake Review / Edit before Accounting Pipeline Transformation
+  const [reviewModalDoc, setReviewModalDoc] = useState<DocumentItem | null>(null);
+  const [uploadedBatchDocs, setUploadedBatchDocs] = useState<DocumentItem[]>([]);
+  const [reviewForm, setReviewForm] = useState({
+    invoice_number: '',
+    date: '',
+    party_name: '',
+    subtotal: '',
+    tax: '',
+    total: '',
+    target_account_code: '5200',
+  });
+  const [isPostingToPipeline, setIsPostingToPipeline] = useState(false);
+
+  const selectDocForReview = (doc: DocumentItem) => {
+    setReviewModalDoc(doc);
+    const ext = doc.extracted_data || {};
+    const cat = getDocCategory(doc);
+    let defaultAcc = '5200';
+    if (cat === 'sales_records') defaultAcc = '4000';
+    else if (cat === 'bank_statements') defaultAcc = '1000';
+    else if (ext.category === 'Cloud' || (ext.party_name && /cloud|aws|google|azure|digitalocean/i.test(ext.party_name))) defaultAcc = '5100';
+    else if (ext.category === 'Travel' || (ext.party_name && /uber|ola|airline|flight|hotel/i.test(ext.party_name))) defaultAcc = '5300';
+    else if (ext.category === 'Legal' || (ext.party_name && /advocate|legal|consult/i.test(ext.party_name))) defaultAcc = '5400';
+
+    const rawTotal = ext.total !== undefined ? Number(ext.total) : 0;
+    const rawSubtotal = ext.subtotal !== undefined ? Number(ext.subtotal) : (rawTotal > 0 ? +(rawTotal * 0.82).toFixed(2) : 0);
+    const rawTax = ext.tax !== undefined ? Number(ext.tax) : (rawTotal > 0 ? +(rawTotal * 0.18).toFixed(2) : 0);
+
+    setReviewForm({
+      invoice_number: ext.invoice_number || (doc.original_filename || (doc as any).filename || 'INV-001').replace(/\.[^/.]+$/, ''),
+      date: ext.date || new Date().toISOString().split('T')[0],
+      party_name: ext.party_name || ext.vendor || ext.seller_name || 'Vendor / Counterparty',
+      subtotal: rawSubtotal ? String(rawSubtotal) : '',
+      tax: rawTax ? String(rawTax) : '',
+      total: rawTotal ? String(rawTotal) : '',
+      target_account_code: defaultAcc,
+    });
+  };
+
+  const handleConfirmAndPostToPipeline = async () => {
+    if (!reviewModalDoc) return;
+    setIsPostingToPipeline(true);
+    try {
+      const res = await fetch('http://localhost:8000/api/v1/accounting/confirm-intake', {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': csrfToken,
+        },
+        body: JSON.stringify({
+          document_id: reviewModalDoc.id,
+          invoice_number: reviewForm.invoice_number || undefined,
+          date: reviewForm.date || undefined,
+          party_name: reviewForm.party_name || undefined,
+          subtotal: reviewForm.subtotal ? parseFloat(reviewForm.subtotal) : undefined,
+          tax: reviewForm.tax ? parseFloat(reviewForm.tax) : undefined,
+          total: reviewForm.total ? parseFloat(reviewForm.total) : undefined,
+          target_account_code: reviewForm.target_account_code || '5200',
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        await fetchDocs();
+        setIsProcessingBatch(false);
+        setReviewModalDoc(null);
+        setActiveNav('accounting');
+        setShowToast(`✓ Transformed & posted to Accounting Pipeline! Journal Entry #${(data.entry_number || data.journal_entry_id || '').slice(0, 10)}`);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setShowToast(`Error posting to accounting pipeline: ${errData.detail || 'Server error'}`);
+      }
+    } catch (e) {
+      console.error(e);
+      setShowToast('Network error while posting to accounting pipeline');
+    } finally {
+      setIsPostingToPipeline(false);
+    }
+  };
+
+  const preProcessingStats = useMemo(() => {
+    const missingIdentifierCount = documents.filter(d => {
+      const data = d.extracted_data || {};
+      return !data.identifier && !data.invoice_number && !data.account_number;
+    }).length;
+
+    const missingDateCount = documents.filter(d => {
+      const data = d.extracted_data || {};
+      return !data.date && !data.invoice_date && !data.receipt_date;
+    }).length;
+
+    const missingPartyCount = documents.filter(d => {
+      const data = d.extracted_data || {};
+      return !data.party_name && !data.vendor_name && !data.merchant_name && !data.bank_name && !data.party_tax_id && !data.vendor_gstin;
+    }).length;
+
+    const arithmeticVarianceCount = documents.filter(d => {
+      if (d.status === 'needs_review') return true;
+      const sub = Number(d.extracted_data?.subtotal) || 0;
+      const tax = Number(d.extracted_data?.tax_total ?? d.extracted_data?.tax ?? ((Number(d.extracted_data?.cgst) || 0) + (Number(d.extracted_data?.sgst) || 0))) || 0;
+      const total = Number(d.extracted_data?.grand_total ?? d.extracted_data?.total) || 0;
+      return total > 0 && Math.abs((sub + tax) - total) > 1.0;
+    }).length;
+
+    const duplicateCount = documents.filter(d => Boolean(d.extracted_data?.duplicate_info?.is_duplicate)).length;
+    const readyApprovalCount = documents.filter(d => d.status !== 'needs_review' && d.review_status !== 'approved_by_ca').length;
+
+    return {
+      missingIdentifierCount,
+      missingDateCount,
+      missingPartyCount,
+      arithmeticVarianceCount,
+      duplicateCount,
+      readyApprovalCount
+    };
+  }, [documents]);
+
+  const filteredDocs = useMemo(() => {
+    return documents
+      .filter(d => d.original_filename.toLowerCase().includes(searchQuery.toLowerCase()))
+      .filter(d => {
+        if (!selectedCategoryFilter) return true;
+        if (selectedCategoryFilter === 'duplicates') {
+          return Boolean(d.extracted_data?.duplicate_info?.is_duplicate);
+        }
+        if (selectedCategoryFilter === 'needs_review') {
+          return d.status === 'needs_review';
+        }
+        if (selectedCategoryFilter === 'missing_identifier') {
+          const data = d.extracted_data || {};
+          return !data.identifier && !data.invoice_number && !data.account_number;
+        }
+        if (selectedCategoryFilter === 'missing_date') {
+          const data = d.extracted_data || {};
+          return !data.date && !data.invoice_date && !data.receipt_date;
+        }
+        if (selectedCategoryFilter === 'missing_party') {
+          const data = d.extracted_data || {};
+          return !data.party_name && !data.vendor_name && !data.merchant_name && !data.bank_name && !data.party_tax_id && !data.vendor_gstin;
+        }
+        if (selectedCategoryFilter === 'arithmetic_variance') {
+          if (d.status === 'needs_review') return true;
+          const sub = Number(d.extracted_data?.subtotal) || 0;
+          const tax = Number(d.extracted_data?.tax_total ?? d.extracted_data?.tax ?? ((Number(d.extracted_data?.cgst) || 0) + (Number(d.extracted_data?.sgst) || 0))) || 0;
+          const total = Number(d.extracted_data?.grand_total ?? d.extracted_data?.total) || 0;
+          return total > 0 && Math.abs((sub + tax) - total) > 1.0;
+        }
+        if (selectedCategoryFilter === 'ready_approval') {
+          return d.status !== 'needs_review' && d.review_status !== 'approved_by_ca';
+        }
+        return getDocCategory(d) === selectedCategoryFilter;
+      });
+  }, [documents, searchQuery, selectedCategoryFilter]);
 
   const openDocDrawer = (doc: DocumentItem) => {
     setSelectedDoc(doc);
@@ -454,6 +656,8 @@ export default function Home() {
         await fetchDocs();
 
         if (newDocs.length > 0) {
+          setUploadedBatchDocs(newDocs);
+          selectDocForReview(newDocs[0]);
           setSelectedDoc(newDocs[0]);
           setDrawerTab(getDocCategory(newDocs[0]) === 'others' ? 'json' : 'tabular');
         }
@@ -708,417 +912,272 @@ export default function Home() {
     );
   }
 
+
+  const docsReceived = documents.length;
+  const checksPassedCount = documents.filter(d => d.status !== 'needs_review').length;
+  const needsReviewCount = documents.filter(d => d.status === 'needs_review').length;
+  const pendingApprovalCount = documents.filter(d => d.review_status !== 'approved_by_ca').length;
+  const duplicateCount = documents.filter(d => d.extracted_data?.duplicate_info?.is_duplicate).length;
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-[#f8f9fb] text-slate-800 font-sans">
-      {/* 1. LEFT SIDEBAR (Matching Screenshot Exactly) */}
-      <aside className="w-64 bg-white border-r border-slate-200/80 flex flex-col justify-between p-4 select-none shrink-0">
-        <div className="min-w-0">
-          {/* User Profile Header (Demo Account) */}
-          <div className="flex items-center justify-between pb-5 mb-4 border-b border-slate-100 gap-2 min-w-0">
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-amber-200 to-emerald-300 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-700 shrink-0 shadow-2xs">
-                {currentUser?.full_name ? currentUser.full_name.split(' ').map((n: string) => n[0]).join('').slice(0, 2).toUpperCase() : 'CH'}
-              </div>
-              <div className="min-w-0 flex-1 overflow-hidden">
-                <span 
-                  className="text-sm font-semibold text-slate-800 block truncate"
-                  title={currentUser?.full_name || 'CA Hehram'}
-                >
-                  {currentUser?.full_name || 'CA Hehram'}
-                </span>
-                <span 
-                  className="text-[10px] text-slate-400 block -mt-0.5 truncate"
-                  title={currentUser?.role === 'ca_admin' ? 'Chartered Accountant (Admin)' : 'Accountant'}
-                >
-                  {currentUser?.role === 'ca_admin' ? 'Chartered Accountant (Admin)' : 'Accountant'}
-                </span>
-              </div>
-            </div>
-            <button 
-              type="button"
-              className="text-slate-400 hover:text-slate-600 p-1 shrink-0 rounded-lg hover:bg-slate-100 transition-colors"
-              title="Collapse sidebar"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-          </div>
+    <div 
+      onDragOver={(e) => {
+        e.preventDefault();
+        setIsDragging(true);
+      }}
+      onDragLeave={(e) => {
+        e.preventDefault();
+        if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+        setIsDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          handleFileUpload(Array.from(e.dataTransfer.files));
+        }
+      }}
+      className="flex h-screen w-screen overflow-hidden bg-[#F5F7FA] text-[#17202A] font-sans relative"
+    >
+      {/* Hidden File Input for Native File Browser Selection */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.csv,.xlsx,.xls"
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            handleFileUpload(Array.from(e.target.files));
+            e.target.value = '';
+          }
+        }}
+      />
 
-          {/* Navigation Controls */}
-          <div className="space-y-1">
-            <button 
-              onClick={() => setActiveNav('workspace')}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                activeNav === 'workspace'
-                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-200'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <Layers className={`w-4 h-4 ${activeNav === 'workspace' ? 'text-white' : 'text-slate-500'}`} />
-                <span>Workspace & Ingestion</span>
-              </div>
-              <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-mono ${
-                activeNav === 'workspace' ? 'bg-blue-500 text-white' : 'bg-slate-100 border border-slate-200 text-slate-600'
-              }`}>
-                {documents.length}
-              </span>
-            </button>
+      {/* Drag & Drop Visual Overlay */}
+      {isDragging && (
+        <div className="fixed inset-0 bg-[#172332]/80 backdrop-blur-xs z-50 flex flex-col items-center justify-center border-4 border-dashed border-[#1F5D8F] pointer-events-none animate-in fade-in duration-150">
+          <UploadCloud className="w-16 h-16 text-[#A8C6DC] animate-bounce mb-3" />
+          <p className="text-white text-base font-bold">Drop files here to upload into LedgerAgent</p>
+          <p className="text-[#94A3B8] text-xs mt-1">Accepts PDF invoices, receipts, and bank statements</p>
+        </div>
+      )}
 
-            <button 
-              onClick={() => setActiveNav('accounting')}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all ${
-                activeNav === 'accounting'
-                  ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-200'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              <div className="flex items-center gap-2.5">
-                <BookOpen className={`w-4 h-4 ${activeNav === 'accounting' ? 'text-white' : 'text-indigo-500'}`} />
-                <span>Accounting & Ledgers</span>
-              </div>
-              <span className={`text-[9.5px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${
-                activeNav === 'accounting' ? 'bg-indigo-500 text-white' : 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
-              }`}>
-                CA Engine
-              </span>
-            </button>
+      {/* 1. LEFT SIDEBAR */}
+      <Sidebar 
+        activeView={activeNav}
+        onSelectView={handleNavSelect}
+        onOpenUploadModal={() => fileInputRef.current?.click()}
+        exceptionCount={needsReviewCount}
+        documentCount={docsReceived}
+        preProcessingStats={preProcessingStats}
+        activeFilter={selectedCategoryFilter}
+        onSelectFilter={(filterId) => {
+          setActiveNav('workspace');
+          setSelectedCategoryFilter(filterId);
+        }}
+        onLogout={handleLogout}
+        currentUserName={currentUser?.full_name || 'CA Hehram'}
+      />
 
-            <button 
-              onClick={() => setShowAllUploadsModal(true)}
-              className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
-            >
-              <div className="flex items-center gap-2.5">
-                <UploadCloud className="w-4 h-4 text-slate-400" />
-                <span>All Documents Modal</span>
-              </div>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-            </button>
-          </div>
+      {/* 2. MAIN APPLICATION WORKSPACE */}
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
+        <TopBar
+          currentFirmName={currentFirm?.name || 'AiroKnight Studios'}
+          currentUser={currentUser}
+          onOpenUpload={() => fileInputRef.current?.click()}
+          onLogout={handleLogout}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          documentCount={docsReceived}
+        />
 
-          {/* Recent Ingested Activity */}
-          <div className="mt-8">
-            <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider px-3 mb-2 flex items-center justify-between">
-              <span>Recent Files</span>
-              {documents.length > 4 && (
-                <button
-                  onClick={() => setShowAllUploadsModal(true)}
-                  className="text-[10px] text-blue-600 hover:underline font-normal"
-                >
-                  See all
-                </button>
-              )}
-            </div>
-            <div className="space-y-1 text-xs">
-              {documents.slice(0, 5).map(doc => (
-                <div 
-                  key={doc.id}
-                  onClick={() => openDocDrawer(doc)}
-                  className="px-2.5 py-1.5 rounded-lg text-slate-600 hover:bg-slate-50 cursor-pointer flex items-center justify-between group transition-colors"
-                >
-                  <div className="flex items-center gap-2 truncate">
-                    {doc.status === 'needs_review' ? (
-                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
-                    ) : (
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
+        {activeNav === 'accounting' ? (
+          <AccountingWorkspace csrfToken={csrfToken} initialSubTab={accountingSubTab} />
+        ) : activeNav === 'audit' ? (
+          <AuditView csrfToken={csrfToken} />
+        ) : (
+          <main className="flex-1 flex flex-col h-full overflow-y-auto px-8 py-6 relative bg-[#F5F7FA]">
+            <div className="max-w-7xl mx-auto w-full space-y-5">
+              {/* Operational Page Header */}
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[#D9E0E7]">
+                <div>
+                  <div className="flex items-center gap-2.5">
+                    <h1 className="text-xl font-bold text-[#17202A] tracking-tight">
+                      {selectedCategoryFilter === 'invoices' ? 'Purchase Invoices Register'
+                        : selectedCategoryFilter === 'sales_records' ? 'Sales Invoices Register'
+                        : selectedCategoryFilter === 'purchase_records' ? 'Purchase Records & POs'
+                        : selectedCategoryFilter === 'receipts' ? 'Receipts & Expense Slips'
+                        : selectedCategoryFilter === 'bank_statements' ? 'Bank Statements & Transactions'
+                        : selectedCategoryFilter === 'needs_review' ? 'Validation Exceptions Work Queue'
+                        : selectedCategoryFilter === 'duplicates' ? 'Duplicate Document Audit'
+                        : selectedCategoryFilter === 'missing_identifier' ? 'Pre-Processing: Missing Invoice Numbers'
+                        : selectedCategoryFilter === 'missing_date' ? 'Pre-Processing: Missing Transaction Dates'
+                        : selectedCategoryFilter === 'missing_party' ? 'Pre-Processing: Missing Party / GSTIN'
+                        : selectedCategoryFilter === 'arithmetic_variance' ? 'Pre-Processing: Arithmetic Variances'
+                        : selectedCategoryFilter === 'ready_approval' ? 'Pre-Processing: Ready for CA Approval'
+                        : 'Financial Operations Overview'}
+                    </h1>
+                    {selectedCategoryFilter && (
+                      <button
+                        onClick={() => setSelectedCategoryFilter(null)}
+                        className="text-[11px] font-semibold text-[#1F5D8F] bg-[#E8F1F8] border border-[#A8C6DC] px-2 py-0.5 rounded-[4px] hover:bg-[#D3E4F2] flex items-center gap-1"
+                        title="Clear active filter"
+                      >
+                        <X className="w-3 h-3" />
+                        <span>Clear filter</span>
+                      </button>
                     )}
-                    <span className="truncate max-w-[130px]">{doc.original_filename}</span>
                   </div>
-                  {renderThreeDotsMenu(doc, false)}
+                  <p className="text-xs text-[#6B7280] mt-0.5">
+                    Review normalized accounting records, automated arithmetic verification, and audit readiness • AiroKnight Studios • FY 2026–27
+                  </p>
                 </div>
-              ))}
-            </div>
-          </div>
-        </div>
 
-        {/* Bottom Card: Pro Account & Settings (Matching Screenshot) */}
-        <div className="space-y-3 pt-4 border-t border-slate-100">
-          <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
-            <div className="flex items-center justify-between text-[11px] font-medium text-slate-700">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full border-2 border-emerald-500 bg-emerald-100 inline-block"></span>
-                <span className="font-semibold truncate max-w-[120px]">{currentFirm?.name || 'AiroKnight Studios'}</span>
-              </div>
-              <span className="text-[9px] font-mono text-emerald-600 bg-emerald-50 px-1 py-0.5 rounded border border-emerald-200/50">127.0.0.1</span>
-            </div>
-            <p className="text-[10px] text-slate-400 mt-1">
-              Verified by LedgerAgent Rule Engine
-            </p>
-            <button 
-              onClick={() => fileInputRef.current?.click()}
-              className="mt-2.5 w-full py-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-xs font-semibold shadow-sm shadow-blue-200 transition-colors"
-            >
-              Upload Invoices
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between text-xs text-slate-400 px-1 pt-1">
-            <span className="text-slate-500 font-medium">Settings</span>
-            <button 
-              onClick={handleLogout}
-              title="Sign Out"
-              className="flex items-center gap-1 text-[11px] text-rose-500 hover:text-rose-600 font-medium px-2 py-0.5 rounded-lg hover:bg-rose-50 transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              <span>Sign out</span>
-            </button>
-          </div>
-        </div>
-      </aside>
-
-      {/* 2. MAIN WORKSPACE CANVAS OR ACCOUNTING WORKSPACE */}
-      {activeNav === 'accounting' ? (
-        <AccountingWorkspace csrfToken={csrfToken} />
-      ) : (
-        <main className="flex-1 flex flex-col h-full overflow-y-auto px-10 pt-8 pb-24 relative">
-        <div className="max-w-4xl mx-auto w-full space-y-6">
-          {/* Greeting Banner */}
-          <div>
-            <div className="inline-flex items-center gap-2 bg-blue-100/70 text-blue-600 px-4 py-1.5 rounded-full text-2xl md:text-3xl font-bold">
-              <span>Welcome, {currentUser?.full_name || 'CA Hehram'}!</span>
-              <span>👋</span>
-            </div>
-            <h1 className="text-3xl md:text-4xl font-normal text-slate-400 mt-2 tracking-tight">
-              How can I help you today?
-            </h1>
-          </div>
-
-          {/* Cards Grid: Row 1 */}
-          <div className="grid grid-cols-2 gap-4">
-            {/* Top Left Card: Previously Uploaded Files */}
-            <div className="p-5 bg-white rounded-2xl border border-slate-200/70 shadow-sm hover:shadow transition-all">
-              <div className="flex items-center justify-between text-xs font-medium text-slate-500 mb-3">
-                <div className="flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-slate-400" />
-                  <span>Uploaded Financial Files</span>
-                  <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.2 rounded text-slate-500">{documents.length}</span>
-                </div>
-                {documents.length > 3 && (
-                  <button
-                    onClick={() => setShowAllUploadsModal(true)}
-                    className="text-[11px] font-semibold text-blue-600 hover:text-blue-700 hover:underline"
+                <div className="flex items-center gap-2.5">
+                  <button 
+                    onClick={() => handleScanDuplicates()}
+                    className="px-3 py-1.5 bg-white text-[#17202A] hover:bg-[#F8FAFC] rounded-[6px] text-xs font-medium border border-[#D9E0E7] flex items-center gap-1.5 transition-colors shadow-2xs"
+                    title="Audit entire firm ledger for duplicate files or double billing"
                   >
-                    View all
+                    <Copy className="w-3.5 h-3.5 text-[#1F5D8F]" />
+                    <span>Audit Duplicates</span>
                   </button>
-                )}
-              </div>
-              <div className="space-y-2">
-                {documents.slice(0, 4).map((doc) => (
-                  <div
-                    key={doc.id}
-                    onClick={() => openDocDrawer(doc)}
-                    className="flex items-center justify-between p-2 rounded-xl hover:bg-slate-50 cursor-pointer transition-colors group"
+
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3.5 py-1.5 bg-[#1F5D8F] hover:bg-[#174A73] text-white rounded-[6px] text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
                   >
-                    <div className="flex items-center gap-2.5 truncate">
-                      {doc.document_type === 'bank_statement' ? (
-                        <div className="w-6 h-6 rounded bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                          <FileSpreadsheet className="w-3.5 h-3.5" />
-                        </div>
-                      ) : (
-                        <div className="w-6 h-6 rounded bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
-                          <FileText className="w-3.5 h-3.5" />
-                        </div>
-                      )}
-                      <span className="text-xs font-medium text-slate-800 truncate max-w-[140px]">{doc.original_filename}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {doc.status === 'needs_review' ? (
-                        <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full">
-                          ! Review
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">
-                          ✓ Auto
-                        </span>
-                      )}
-                      {renderThreeDotsMenu(doc, true)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Top Right Card: Drag & Drop Ingestion with Big '+' Icon and Multi-file Support */}
-            <div 
-              onDragEnter={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
-              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-              onDrop={(e) => {
-                e.preventDefault();
-                setIsDragging(false);
-                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-                  handleFileUpload(Array.from(e.dataTransfer.files));
-                }
-              }}
-              onClick={() => fileInputRef.current?.click()}
-              className={`group p-6 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between relative overflow-hidden min-h-[220px] ${
-                isDragging 
-                  ? 'border-blue-500 bg-blue-50/70 shadow-lg scale-[1.01]' 
-                  : 'bg-white border-dashed border-slate-300 hover:border-blue-400 shadow-sm hover:shadow-md hover:bg-slate-50/40'
-              }`}
-            >
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0) {
-                    handleFileUpload(Array.from(e.target.files));
-                  }
-                }}
-                className="hidden"
-                accept=".pdf,.png,.jpg,.jpeg,.csv,.xlsx,.zip"
-              />
-
-              <div className="flex items-center justify-between text-xs font-semibold text-slate-500">
-                <div className="flex items-center gap-1.5 text-blue-600 font-bold">
-                  <Sparkles className="w-4 h-4 text-blue-500 animate-pulse" />
-                  <span>AI Ingestion & Auto-Categorization</span>
-                </div>
-                <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-200/60 font-semibold">
-                  Multiple Files Supported
-                </span>
-              </div>
-
-              {/* Big Plus Icon & Clear Guidance */}
-              <div className="py-2 text-center my-auto">
-                <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-blue-500 text-white flex items-center justify-center mx-auto mb-2.5 shadow-md shadow-blue-500/20 group-hover:scale-110 group-hover:rotate-90 group-hover:shadow-blue-500/30 transition-all duration-300">
-                  <Plus className="w-8 h-8 stroke-[2.5]" />
-                </div>
-                <h3 className="text-sm font-bold text-slate-800 group-hover:text-blue-600 transition-colors">
-                  {isUploading ? 'Extracting via RapidOCR & AI Pipeline...' : 'Drop files here or click to browse'}
-                </h3>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Select single or multiple files (PDFs, receipts, invoices, bank statements, spreadsheets)
-                </p>
-
-                {/* 6 Categories Clean Preview Chips */}
-                <div className="flex flex-wrap items-center justify-center gap-1.5 mt-2.5">
-                  {CATEGORIES_CONFIG.map(cat => (
-                    <span 
-                      key={cat.id} 
-                      className={`text-[9.5px] font-semibold px-2 py-0.5 rounded-full border ${cat.bg} ${cat.color} ${cat.border}`}
-                    >
-                      {cat.label}
-                    </span>
-                  ))}
+                    <UploadCloud className="w-3.5 h-3.5" />
+                    <span>Upload Documents</span>
+                  </button>
                 </div>
               </div>
 
-              <div className="flex items-center justify-between text-[11px] text-slate-400 pt-2 border-t border-slate-100">
-                <span>PDF, PNG, JPG, CSV, Excel</span>
-                <span className="text-blue-600 font-semibold group-hover:translate-x-0.5 transition-transform flex items-center gap-0.5">
-                  + Add Multiple Files
-                </span>
-              </div>
-            </div>
-          </div>
+              {/* 6 Compact Operational KPI Summary Cards */}
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                <div 
+                  onClick={() => setSelectedCategoryFilter(null)}
+                  className="p-3 bg-white rounded-[8px] border border-[#D9E0E7] shadow-2xs cursor-pointer hover:border-[#B8C2CC] transition-colors"
+                >
+                  <span className="text-[11px] font-medium text-[#6B7280] block">Documents Ingested</span>
+                  <span className="text-lg font-bold text-[#17202A] font-mono mt-0.5 block tabular-nums">{docsReceived}</span>
+                  <span className="text-[10px] text-[#9CA3AF] mt-0.5 block truncate">Total in client ledger</span>
+                </div>
 
-          {/* Cards Grid: Row 2 (Suggested Tasks) */}
-          <div className="grid grid-cols-2 gap-4">
-            <div 
-              onClick={() => handleSendChat('Run arithmetic verification and tax checks across all invoices.')}
-              className="p-4 bg-white rounded-2xl border border-slate-200/70 shadow-sm hover:border-slate-300 cursor-pointer transition-all"
-            >
-              <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                <Sparkles className="w-3.5 h-3.5 text-slate-400" />
-                <span>Suggested Action</span>
-              </div>
-              <h3 className="text-sm font-semibold text-slate-800 mt-1.5">
-                Verify Arithmetic & GST Calculations
-              </h3>
-            </div>
+                <div className="p-3 bg-white rounded-[8px] border border-[#D9E0E7] shadow-2xs">
+                  <span className="text-[11px] font-medium text-[#6B7280] block">Processing Pipeline</span>
+                  <span className="text-lg font-bold text-[#1F5D8F] font-mono mt-0.5 block tabular-nums">{isUploading ? '1 Active' : '0 Idle'}</span>
+                  <span className="text-[10px] text-[#9CA3AF] mt-0.5 block truncate">RapidOCR & Qwen</span>
+                </div>
 
-            <div 
-              onClick={() => handleSendChat('Draft client follow-up for missing bills and flagged discrepancies.')}
-              className="p-4 bg-white rounded-2xl border border-slate-200/70 shadow-sm hover:border-slate-300 cursor-pointer transition-all"
-            >
-              <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                <Sparkles className="w-3.5 h-3.5 text-slate-400" />
-                <span>Suggested Action</span>
-              </div>
-              <h3 className="text-sm font-semibold text-slate-800 mt-1.5">
-                Draft Client Inquiry for Flagged Items
-              </h3>
-            </div>
-          </div>
+                <div 
+                  onClick={() => setSelectedCategoryFilter(null)}
+                  className="p-3 bg-white rounded-[8px] border border-[#D9E0E7] shadow-2xs cursor-pointer hover:border-[#B8C2CC] transition-colors"
+                >
+                  <span className="text-[11px] font-medium text-[#237A57] block">Checks Passed</span>
+                  <span className="text-lg font-bold text-[#237A57] font-mono mt-0.5 block tabular-nums">{checksPassedCount}</span>
+                  <span className="text-[10px] text-[#9CA3AF] mt-0.5 block truncate">Deterministic rules verified</span>
+                </div>
 
-          {/* Bottom Card: Verification Tasks & Queue (Matching Screenshot "My Tasks") */}
-          <div className="p-5 bg-white rounded-2xl border border-slate-200/70 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
+                <div 
+                  onClick={() => setSelectedCategoryFilter('needs_review')}
+                  className="p-3 bg-white rounded-[8px] border border-[#D9E0E7] shadow-2xs cursor-pointer hover:border-[#B8C2CC] transition-colors"
+                >
+                  <span className="text-[11px] font-medium text-[#9A6700] block">Needs Review</span>
+                  <span className="text-lg font-bold text-[#9A6700] font-mono mt-0.5 block tabular-nums">{needsReviewCount}</span>
+                  <span className="text-[10px] text-[#9CA3AF] mt-0.5 block truncate">Variance or field issues</span>
+                </div>
+
+                <div 
+                  onClick={() => setActiveNav('accounting')}
+                  className="p-3 bg-white rounded-[8px] border border-[#D9E0E7] shadow-2xs cursor-pointer hover:border-[#B8C2CC] transition-colors"
+                >
+                  <span className="text-[11px] font-medium text-[#17202A] block">Pending CA Review</span>
+                  <span className="text-lg font-bold text-[#17202A] font-mono mt-0.5 block tabular-nums">{pendingApprovalCount}</span>
+                  <span className="text-[10px] text-[#9CA3AF] mt-0.5 block truncate">Awaiting approval</span>
+                </div>
+
+                <div 
+                  onClick={() => setSelectedCategoryFilter('duplicates')}
+                  className="p-3 bg-white rounded-[8px] border border-[#D9E0E7] shadow-2xs cursor-pointer hover:border-[#B8C2CC] transition-colors"
+                >
+                  <span className="text-[11px] font-medium text-[#B33A3A] block">Duplicate Alerts</span>
+                  <span className="text-lg font-bold text-[#B33A3A] font-mono mt-0.5 block tabular-nums">{duplicateCount}</span>
+                  <span className="text-[10px] text-[#9CA3AF] mt-0.5 block truncate">SHA-256 or ID matches</span>
+                </div>
+              </div>
+
+          {/* Register & Verification Working Surface */}
+          <div className="bg-white rounded-[8px] border border-[#D9E0E7] p-5 shadow-xs space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <FileCheck className="w-4 h-4 text-slate-600" />
-                <h3 className="text-sm font-bold text-slate-800">Accounting Verification Tasks</h3>
-                <span className="text-xs text-slate-400 font-mono">{documents.length}</span>
+                <FileCheck className="w-4 h-4 text-[#1F5D8F]" />
+                <h3 className="text-sm font-bold text-[#17202A]">Accounting Register & Verification Grid</h3>
+                <span className="text-xs text-[#6B7280] font-mono tabular-nums">({documents.length} records)</span>
               </div>
 
-              <div className="flex items-center gap-3">
-                {/* View Mode Toggle: Excel Sheet Grid vs Compact Cards */}
-                <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs">
+              <div className="flex items-center gap-2.5">
+                {/* View Mode Toggle */}
+                <div className="flex items-center bg-[#F8FAFC] p-0.5 rounded-[6px] border border-[#D9E0E7] text-xs">
                   <button
                     onClick={() => setTasksViewMode('grid')}
-                    className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
+                    className={`px-2.5 py-1 rounded-[4px] font-semibold flex items-center gap-1.5 transition-colors ${
                       tasksViewMode === 'grid'
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
+                        ? 'bg-[#1F5D8F] text-white shadow-2xs'
+                        : 'text-[#6B7280] hover:text-[#17202A]'
                     }`}
                     title="Excel-Inspired Register Spreadsheet Grid"
                   >
                     <Table className="w-3.5 h-3.5" />
-                    <span>Excel Grid</span>
+                    <span>Tabular Grid</span>
                   </button>
                   <button
                     onClick={() => setTasksViewMode('cards')}
-                    className={`px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1.5 transition-all ${
+                    className={`px-2.5 py-1 rounded-[4px] font-semibold flex items-center gap-1.5 transition-colors ${
                       tasksViewMode === 'cards'
-                        ? 'bg-white text-slate-900 shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
+                        ? 'bg-white text-[#17202A] shadow-2xs border border-[#D9E0E7]'
+                        : 'text-[#6B7280] hover:text-[#17202A]'
                     }`}
                     title="Compact Row List"
                   >
                     <List className="w-3.5 h-3.5" />
-                    <span>Cards</span>
+                    <span>Cards List</span>
                   </button>
                 </div>
 
-                <div className="relative w-48">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                <div className="relative w-44 sm:w-56">
+                  <Search className="w-3.5 h-3.5 text-[#6B7280] absolute left-2.5 top-2" />
                   <input
                     type="text"
                     placeholder="Search documents..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-8 pr-3 py-1 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-700 focus:outline-none focus:border-blue-400"
+                    className="w-full pl-8 pr-3 py-1 bg-white border border-[#D9E0E7] rounded-[6px] text-xs text-[#17202A] placeholder-[#9CA3AF] focus:outline-none focus:border-[#1F5D8F]"
                   />
                 </div>
+
                 <button 
                   onClick={() => handleSendChat('/exceptions')}
-                  className="px-3 py-1 bg-purple-50 text-purple-600 hover:bg-purple-100 rounded-full text-xs font-semibold flex items-center gap-1.5 border border-purple-200/60 transition-colors"
+                  className="px-2.5 py-1 bg-[#FFF5D6] text-[#9A6700] hover:bg-[#FEEFC3] rounded-[6px] text-xs font-semibold flex items-center gap-1.5 border border-[#E7CA75] transition-colors"
                 >
-                  <Sparkles className="w-3 h-3 text-purple-500" />
+                  <AlertTriangle className="w-3 h-3 text-[#9A6700]" />
                   <span>Prioritize Exceptions</span>
-                </button>
-                <button 
-                  onClick={() => handleScanDuplicates()}
-                  className="px-3 py-1 bg-amber-50 text-amber-700 hover:bg-amber-100 rounded-full text-xs font-semibold flex items-center gap-1.5 border border-amber-200/60 transition-colors"
-                  title="Audit entire firm ledger for duplicate files, invoice numbers, or double billing"
-                >
-                  <Copy className="w-3 h-3 text-amber-600" />
-                  <span>Audit Duplicates</span>
                 </button>
               </div>
             </div>
 
-            {/* 6 Category Filter Tabs + Duplicates Filter */}
+            {/* Category Filter Tabs */}
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs select-none">
               <button
                 onClick={() => setSelectedCategoryFilter(null)}
-                className={`px-3 py-1 rounded-full text-[11px] font-semibold transition-colors shrink-0 ${
+                className={`px-3 py-1 rounded-[6px] text-[11px] font-medium transition-colors shrink-0 ${
                   selectedCategoryFilter === null 
-                    ? 'bg-slate-900 text-white shadow-sm' 
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    ? 'bg-[#1F5D8F] text-white shadow-2xs font-semibold' 
+                    : 'bg-[#F8FAFC] text-[#4B5563] hover:bg-[#EEF2F6] border border-[#D9E0E7]'
                 }`}
               >
-                All Categories ({documents.length})
+                All Records ({documents.length})
               </button>
               {CATEGORIES_CONFIG.map(cat => {
                 const count = documents.filter(d => getDocCategory(d) === cat.id).length;
@@ -1127,14 +1186,14 @@ export default function Home() {
                   <button
                     key={cat.id}
                     onClick={() => setSelectedCategoryFilter(isSelected ? null : cat.id)}
-                    className={`px-3 py-1 rounded-full text-[11px] font-semibold border transition-all shrink-0 flex items-center gap-1.5 ${
+                    className={`px-3 py-1 rounded-[6px] text-[11px] transition-all shrink-0 flex items-center gap-1.5 border ${
                       isSelected 
-                        ? `${cat.bg} ${cat.color} ${cat.border} ring-2 ring-blue-400 font-bold` 
-                        : `${cat.bg} ${cat.color} ${cat.border} opacity-80 hover:opacity-100`
+                        ? 'bg-[#E8F1F8] text-[#1F5D8F] border-[#1F5D8F] font-semibold' 
+                        : 'bg-[#F8FAFC] text-[#4B5563] border-[#D9E0E7] hover:bg-[#EEF2F6]'
                     }`}
                   >
                     <span>{cat.label}</span>
-                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-white/80 border border-slate-200/40">
+                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-white border border-[#D9E0E7] tabular-nums">
                       {count}
                     </span>
                   </button>
@@ -1144,15 +1203,15 @@ export default function Home() {
               {documents.some(d => d.extracted_data?.duplicate_info?.is_duplicate) && (
                 <button
                   onClick={() => setSelectedCategoryFilter(selectedCategoryFilter === 'duplicates' ? null : 'duplicates')}
-                  className={`px-3 py-1 rounded-full text-[11px] font-semibold border transition-all shrink-0 flex items-center gap-1.5 ${
+                  className={`px-3 py-1 rounded-[6px] text-[11px] font-semibold border transition-all shrink-0 flex items-center gap-1.5 ${
                     selectedCategoryFilter === 'duplicates'
-                      ? 'bg-rose-600 text-white border-rose-700 shadow-sm font-bold'
-                      : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+                      ? 'bg-[#B33A3A] text-white border-[#B33A3A] shadow-2xs'
+                      : 'bg-[#FDECEC] text-[#B33A3A] border-[#E8AAAA] hover:bg-[#FCD8D8]'
                   }`}
                 >
-                  <AlertTriangle className="w-3 h-3 text-rose-500" />
+                  <AlertTriangle className="w-3 h-3 text-[#B33A3A]" />
                   <span>Duplicates</span>
-                  <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-white/80 text-rose-800">
+                  <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-white text-[#B33A3A] tabular-nums">
                     {documents.filter(d => d.extracted_data?.duplicate_info?.is_duplicate).length}
                   </span>
                 </button>
@@ -1162,15 +1221,7 @@ export default function Home() {
             {/* View Switching: Excel-Inspired Spreadsheet Grid vs Compact Cards List */}
             {tasksViewMode === 'grid' ? (
               <CategorySpreadsheetView
-                documents={documents
-                  .filter(d => d.original_filename.toLowerCase().includes(searchQuery.toLowerCase()))
-                  .filter(d => {
-                    if (!selectedCategoryFilter) return true;
-                    if (selectedCategoryFilter === 'duplicates') {
-                      return Boolean(d.extracted_data?.duplicate_info?.is_duplicate);
-                    }
-                    return getDocCategory(d) === selectedCategoryFilter;
-                  })}
+                documents={filteredDocs}
                 selectedCategory={selectedCategoryFilter}
                 onSelectCategory={(cat) => setSelectedCategoryFilter(cat)}
                 onOpenDocDrawer={(doc) => openDocDrawer(doc)}
@@ -1179,16 +1230,7 @@ export default function Home() {
             ) : (
               /* Task Items with Colored Pills (Compact List) */
               <div className="space-y-2 text-xs">
-                {documents
-                  .filter(d => d.original_filename.toLowerCase().includes(searchQuery.toLowerCase()))
-                  .filter(d => {
-                    if (!selectedCategoryFilter) return true;
-                    if (selectedCategoryFilter === 'duplicates') {
-                      return Boolean(d.extracted_data?.duplicate_info?.is_duplicate);
-                    }
-                    return getDocCategory(d) === selectedCategoryFilter;
-                  })
-                  .map((doc) => {
+                {filteredDocs.map((doc) => {
                   const isNeedsReview = doc.status === 'needs_review';
                   const isApproved = doc.review_status === 'approved_by_ca';
                   const isDup = Boolean(doc.extracted_data?.duplicate_info?.is_duplicate);
@@ -1424,19 +1466,19 @@ export default function Home() {
           </div>
         )}
 
-        {/* 3. FLOATING BOTTOM CHAT BAR (Shifts smoothly when drawer opens) */}
+        {/* 3. Operational Financial Assistant Bar */}
         <div className={`fixed bottom-6 left-64 ${selectedDoc ? 'right-96' : 'right-0'} flex flex-col items-center px-8 pointer-events-none z-30 transition-all duration-200`}>
           {/* Markdown Formatting Options Toolbar */}
           {showFormatBar && (
-            <div className="mb-2 bg-slate-900/95 backdrop-blur-md text-white px-3 py-1.5 rounded-2xl shadow-2xl border border-slate-800 flex items-center gap-1.5 text-[11px] pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-150 select-none">
-              <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider mr-1 flex items-center gap-1">
-                <Code2 className="w-3 h-3 text-emerald-400" />
+            <div className="mb-2 bg-[#172332] text-white px-3 py-1.5 rounded-[6px] shadow-md border border-[#2D425C] flex items-center gap-1.5 text-[11px] pointer-events-auto animate-in fade-in slide-in-from-bottom-2 duration-150 select-none">
+              <span className="text-[10px] font-mono text-[#94A3B8] uppercase tracking-wider mr-1 flex items-center gap-1">
+                <Code2 className="w-3 h-3 text-[#A8C6DC]" />
                 <span>Format:</span>
               </span>
               <button
                 type="button"
                 onClick={() => insertFormat('**bold text**')}
-                className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-bold transition-colors shadow-2xs"
+                className="px-2 py-0.5 rounded-[4px] bg-[#223247] hover:bg-[#2D425C] text-white font-bold transition-colors"
                 title="Insert bold markdown"
               >
                 B
@@ -1444,7 +1486,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => insertFormat('*italic text*')}
-                className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white italic transition-colors font-serif shadow-2xs"
+                className="px-2 py-0.5 rounded-[4px] bg-[#223247] hover:bg-[#2D425C] text-white italic transition-colors font-serif"
                 title="Insert italic markdown"
               >
                 I
@@ -1452,7 +1494,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => insertFormat('\n- ')}
-                className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white transition-colors shadow-2xs"
+                className="px-2 py-0.5 rounded-[4px] bg-[#223247] hover:bg-[#2D425C] text-white transition-colors"
                 title="Insert bullet list item"
               >
                 • List
@@ -1460,24 +1502,24 @@ export default function Home() {
               <button
                 type="button"
                 onClick={insertTableTemplate}
-                className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white transition-colors shadow-2xs flex items-center gap-1"
+                className="px-2 py-0.5 rounded-[4px] bg-[#223247] hover:bg-[#2D425C] text-white transition-colors flex items-center gap-1"
                 title="Insert Markdown table template"
               >
-                <span>▦ Table</span>
+                <span>Table</span>
               </button>
               <button
                 type="button"
                 onClick={() => insertFormat('`code`')}
-                className="px-2 py-0.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white font-mono transition-colors shadow-2xs"
+                className="px-2 py-0.5 rounded-[4px] bg-[#223247] hover:bg-[#2D425C] text-white font-mono transition-colors"
                 title="Insert inline code"
               >
                 ‹/›
               </button>
-              <div className="w-px h-3.5 bg-slate-700 mx-1"></div>
+              <div className="w-px h-3.5 bg-[#2D425C] mx-1"></div>
               <button
                 type="button"
                 onClick={() => handleSendChat('/summary')}
-                className="px-2 py-0.5 rounded-lg bg-purple-900/70 hover:bg-purple-800 text-purple-300 font-mono text-[10px] transition-colors border border-purple-700/50"
+                className="px-2 py-0.5 rounded-[4px] bg-[#1F5D8F] hover:bg-[#174A73] text-white font-mono text-[10px] transition-colors"
                 title="Generate ledger summary report"
               >
                 /summary
@@ -1485,7 +1527,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => handleSendChat('Audit all uploaded files for duplicate documents or double-billing risks')}
-                className="px-2 py-0.5 rounded-lg bg-rose-900/70 hover:bg-rose-800 text-rose-300 font-mono text-[10px] transition-colors border border-rose-700/50"
+                className="px-2 py-0.5 rounded-[4px] bg-[#9A6700] hover:bg-[#7D5400] text-white font-mono text-[10px] transition-colors"
                 title="Run cross-file duplicate audit"
               >
                 /duplicates
@@ -1493,15 +1535,15 @@ export default function Home() {
             </div>
           )}
 
-          <div className="w-full max-w-2xl bg-white rounded-full border border-slate-200/90 shadow-xl p-2 flex items-center gap-2.5 pointer-events-auto transition-all focus-within:border-emerald-400 focus-within:shadow-2xl">
-            {/* Purple Sparkle Plus Icon */}
+          <div className="w-full max-w-2xl bg-white rounded-[8px] border border-[#D9E0E7] shadow-md p-2 flex items-center gap-2.5 pointer-events-auto transition-all focus-within:border-[#1F5D8F] focus-within:ring-1 focus-within:ring-[#1F5D8F]">
+            {/* Upload File Intake Trigger */}
             <button 
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              title="Add documents"
-              className="w-8 h-8 rounded-full bg-purple-50 text-purple-600 hover:bg-purple-100 flex items-center justify-center shrink-0 transition-colors"
+              title="Add documents for extraction"
+              className="w-8 h-8 rounded-[6px] bg-[#F8FAFC] text-[#1F5D8F] hover:bg-[#E8F1F8] border border-[#D9E0E7] flex items-center justify-center shrink-0 transition-colors"
             >
-              <Plus className="w-4 h-4 text-purple-600" />
+              <Plus className="w-4 h-4 text-[#1F5D8F]" />
             </button>
 
             {/* Input Field */}
@@ -1513,18 +1555,18 @@ export default function Home() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') handleSendChat();
               }}
-              placeholder="Ask Nemotron about uploaded documents... (@ to tag, / for commands)"
-              className="flex-1 text-xs text-slate-800 placeholder-slate-400 bg-transparent focus:outline-none px-1"
+              placeholder="Query accounting records, vendor GSTIN, arithmetic variance, or ledgers..."
+              className="flex-1 text-xs text-[#17202A] placeholder-[#9CA3AF] bg-transparent focus:outline-none px-1"
             />
 
             {/* Formatting Option Quick Toggle Button */}
             <button
               type="button"
               onClick={() => setShowFormatBar(!showFormatBar)}
-              className={`p-1.5 rounded-full text-xs transition-colors flex items-center gap-1 ${
+              className={`p-1.5 rounded-[6px] text-xs transition-colors flex items-center gap-1 ${
                 showFormatBar 
-                  ? 'bg-emerald-100 text-emerald-800 font-bold shadow-2xs' 
-                  : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100'
+                  ? 'bg-[#E8F1F8] text-[#1F5D8F] font-semibold' 
+                  : 'text-[#6B7280] hover:text-[#17202A] hover:bg-[#F8FAFC]'
               }`}
               title="Toggle Markdown formatting options toolbar"
             >
@@ -1534,48 +1576,48 @@ export default function Home() {
             {/* Active Model Pill */}
             <span 
               onClick={() => setIsChatOpen(!isChatOpen)}
-              className="cursor-pointer text-[10px] font-mono text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-200/80 hidden sm:flex items-center gap-1.5 shrink-0 transition-colors"
-              title="Click to toggle Nemotron chat window"
+              className="cursor-pointer text-[10px] font-mono text-[#1F5D8F] bg-[#E8F1F8] hover:bg-[#D3E4F2] px-2.5 py-1 rounded-[6px] border border-[#A8C6DC] hidden sm:flex items-center gap-1.5 shrink-0 transition-colors"
+              title="Click to toggle Nemotron accounting copilot window"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="w-1.5 h-1.5 rounded-full bg-[#1F5D8F]"></span>
               <span className="font-semibold">Nemotron 550B</span>
-              <MessageSquare className="w-3 h-3 text-emerald-600 ml-0.5" />
+              <MessageSquare className="w-3 h-3 text-[#1F5D8F] ml-0.5" />
             </span>
 
-            {/* Send Circle Button */}
+            {/* Send Button */}
             <button
               type="button"
               onClick={() => handleSendChat()}
               disabled={!chatQuery.trim() || isThinking}
-              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all ${
+              className={`w-8 h-8 rounded-[6px] flex items-center justify-center transition-all ${
                 chatQuery.trim() && !isThinking
-                  ? 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm' 
-                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                  ? 'bg-[#1F5D8F] text-white hover:bg-[#174A73]' 
+                  : 'bg-[#F8FAFC] text-[#9CA3AF] border border-[#D9E0E7] cursor-not-allowed'
               }`}
             >
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
         </div>
-
       </main>
       )}
+    </div>
 
       {/* 4. SLIDE-OVER EXTRACTION DRAWER (When a Document is Clicked) */}
       {selectedDoc && (
-        <aside className="w-96 bg-white border-l border-slate-200/80 shadow-2xl flex flex-col h-full z-40 animate-in slide-in-from-right duration-200 select-none">
+        <aside className="w-96 lg:w-[480px] bg-white border-l border-[#D9E0E7] shadow-xl flex flex-col h-full z-40 animate-in slide-in-from-right duration-150 select-none">
           {/* Drawer Header */}
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="p-4 border-b border-[#D9E0E7] bg-[#F8FAFC] flex items-center justify-between">
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
-                  OCR & AI Intelligence
+                <span className="text-[10px] font-semibold tracking-wider text-[#1F5D8F] bg-[#E8F1F8] border border-[#A8C6DC] px-2 py-0.5 rounded-[4px]">
+                  Accounting Evidence
                 </span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getDocTypeBadge(selectedDoc).bg}`}>
+                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-[4px] border ${getDocTypeBadge(selectedDoc).bg}`}>
                   {getDocTypeBadge(selectedDoc).label}
                 </span>
               </div>
-              <h3 className="text-xs font-bold text-slate-800 mt-1.5 truncate max-w-[260px]">
+              <h3 className="text-sm font-semibold text-[#17202A] mt-1.5 truncate max-w-[320px]">
                 {selectedDoc.original_filename}
               </h3>
             </div>
@@ -1583,7 +1625,8 @@ export default function Home() {
               {renderThreeDotsMenu(selectedDoc, true)}
               <button 
                 onClick={() => setSelectedDoc(null)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                className="p-1 rounded-[4px] text-[#6B7280] hover:text-[#17202A] hover:bg-[#EEF2F6]"
+                title="Close drawer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1594,30 +1637,30 @@ export default function Home() {
           <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
             {/* Actionable Duplicate Warning Banner */}
             {selectedDoc.extracted_data?.duplicate_info?.is_duplicate && (
-              <div className="p-3.5 bg-rose-50 rounded-xl border border-rose-200 text-slate-700 space-y-2">
-                <div className="flex items-center gap-1.5 text-rose-800 font-bold text-xs">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+              <div className="p-3.5 bg-[#FFF5D6] rounded-[6px] border border-[#E7CA75] text-[#17202A] space-y-2">
+                <div className="flex items-center gap-1.5 text-[#9A6700] font-semibold text-xs">
+                  <AlertTriangle className="w-4 h-4 text-[#9A6700] shrink-0" />
                   <span>Duplicate Document Detected</span>
                 </div>
-                <p className="text-[11px] text-rose-900 leading-relaxed">
+                <p className="text-xs text-[#4B5563] leading-relaxed">
                   Identified as duplicate of <strong>{selectedDoc.extracted_data.duplicate_info.duplicate_of_filename}</strong>.
                   {selectedDoc.extracted_data.duplicate_info.match_reason && (
-                    <span className="block mt-0.5 text-rose-800 font-mono text-[10px]">
+                    <span className="block mt-0.5 text-[#9A6700] font-mono text-[10px]">
                       Basis: {selectedDoc.extracted_data.duplicate_info.match_reason}
                     </span>
                   )}
                 </p>
                 <div className="flex items-center gap-2 pt-0.5">
                   {selectedDoc.extracted_data.duplicate_info.resolved ? (
-                    <span className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-xs text-[#237A57] font-semibold flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#237A57]" />
                       <span>Duplicate Acknowledged by CA</span>
                     </span>
                   ) : (
                     <button
                       type="button"
                       onClick={() => handleResolveDuplicate(selectedDoc.id)}
-                      className="py-1 px-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10.5px] font-semibold transition-colors flex items-center justify-center gap-1 shadow-xs"
+                      className="py-1 px-2.5 bg-[#9A6700] hover:bg-[#7D5400] text-white rounded-[6px] text-xs font-semibold transition-colors flex items-center justify-center gap-1 shadow-xs"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       <span>Acknowledge Duplicate</span>
@@ -1629,25 +1672,25 @@ export default function Home() {
 
             {/* Actionable Exception Banner (needs_review files) */}
             {selectedDoc.status === 'needs_review' && !selectedDoc.extracted_data?.duplicate_info?.is_duplicate && (
-              <div className="p-3.5 bg-amber-50 rounded-xl border border-amber-200 text-slate-700 space-y-2.5">
-                <div className="flex items-center gap-1.5 text-amber-800 font-bold text-xs">
-                  <AlertTriangle className="w-4 h-4 text-amber-600" />
-                  <span>Variance Detected (Needs Review)</span>
+              <div className="p-3.5 bg-[#FFF5D6] rounded-[6px] border border-[#E7CA75] text-[#17202A] space-y-2.5">
+                <div className="flex items-center gap-1.5 text-[#9A6700] font-semibold text-xs">
+                  <AlertTriangle className="w-4 h-4 text-[#9A6700]" />
+                  <span>Arithmetic Variance Detected (Needs Review)</span>
                 </div>
-                <p className="text-[11px] text-amber-900 leading-relaxed">
-                  Document reads <strong className="font-mono">₹{Number(selectedDoc.extracted_data?.grand_total ?? selectedDoc.extracted_data?.total ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>, but Subtotal (<strong className="font-mono">₹{Number(selectedDoc.extracted_data?.subtotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>) + Taxes (<strong className="font-mono">₹{Number(selectedDoc.extracted_data?.tax_total ?? selectedDoc.extracted_data?.tax ?? ((Number(selectedDoc.extracted_data?.cgst) || 0) + (Number(selectedDoc.extracted_data?.sgst) || 0))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>) equals <strong className="font-mono">₹{Number((Number(selectedDoc.extracted_data?.subtotal) || 0) + Number(selectedDoc.extracted_data?.tax_total ?? selectedDoc.extracted_data?.tax ?? ((Number(selectedDoc.extracted_data?.cgst) || 0) + (Number(selectedDoc.extracted_data?.sgst) || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>.
+                <p className="text-xs text-[#4B5563] leading-relaxed">
+                  Document total reads <strong className="font-mono text-[#17202A]">₹{Number(selectedDoc.extracted_data?.grand_total ?? selectedDoc.extracted_data?.total ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>, but Subtotal (<strong className="font-mono text-[#17202A]">₹{Number(selectedDoc.extracted_data?.subtotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>) + Taxes (<strong className="font-mono text-[#17202A]">₹{Number(selectedDoc.extracted_data?.tax_total ?? selectedDoc.extracted_data?.tax ?? ((Number(selectedDoc.extracted_data?.cgst) || 0) + (Number(selectedDoc.extracted_data?.sgst) || 0))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>) equals <strong className="font-mono text-[#17202A]">₹{Number((Number(selectedDoc.extracted_data?.subtotal) || 0) + Number(selectedDoc.extracted_data?.tax_total ?? selectedDoc.extracted_data?.tax ?? ((Number(selectedDoc.extracted_data?.cgst) || 0) + (Number(selectedDoc.extracted_data?.sgst) || 0)))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>.
                 </p>
                 <div className="flex items-center gap-2 pt-1">
                   <button
                     onClick={() => handleApproveWithAdjustment(selectedDoc)}
-                    className="flex-1 py-1.5 px-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-semibold transition-colors flex items-center justify-center gap-1 shadow-sm"
+                    className="flex-1 py-1.5 px-2.5 bg-[#9A6700] hover:bg-[#7D5400] text-white rounded-[6px] text-xs font-semibold transition-colors flex items-center justify-center gap-1 shadow-xs"
                   >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Approve with Adjustment</span>
                   </button>
                   <button
                     onClick={() => handleApprove(selectedDoc.id)}
-                    className="py-1.5 px-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-[11px] font-semibold transition-colors flex items-center justify-center gap-1"
+                    className="py-1.5 px-2.5 bg-white hover:bg-[#F8FAFC] text-[#17202A] border border-[#D9E0E7] rounded-[6px] text-xs font-semibold transition-colors flex items-center justify-center gap-1"
                   >
                     <span>Accept As-Is</span>
                   </button>
@@ -1656,35 +1699,35 @@ export default function Home() {
             )}
 
             {/* View Mode Toggle: Tabular Format vs JSON Format */}
-            <div className="flex items-center bg-slate-100 p-1 rounded-xl">
+            <div className="flex items-center bg-[#F8FAFC] p-1 rounded-[6px] border border-[#D9E0E7]">
               <button
                 type="button"
                 onClick={() => setDrawerTab('tabular')}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                className={`flex-1 py-1.5 px-3 rounded-[4px] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
                   drawerTab === 'tabular' 
-                    ? 'bg-white text-slate-900 shadow-sm' 
-                    : 'text-slate-500 hover:text-slate-800'
+                    ? 'bg-white text-[#17202A] shadow-xs border border-[#D9E0E7]' 
+                    : 'text-[#6B7280] hover:text-[#17202A]'
                 }`}
               >
-                <Table className="w-3.5 h-3.5 text-blue-600" />
+                <Table className="w-3.5 h-3.5 text-[#1F5D8F]" />
                 <span>Tabular Format</span>
                 {getDocTypeBadge(selectedDoc).isTabular && (
-                  <span className="text-[9px] bg-blue-50 text-blue-600 px-1.5 py-0.2 rounded font-mono font-normal">Primary</span>
+                  <span className="text-[9px] bg-[#E8F1F8] text-[#1F5D8F] px-1.5 py-0.2 rounded-[4px] font-mono font-medium">Primary</span>
                 )}
               </button>
               <button
                 type="button"
                 onClick={() => setDrawerTab('json')}
-                className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                className={`flex-1 py-1.5 px-3 rounded-[4px] text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
                   drawerTab === 'json' 
-                    ? 'bg-white text-slate-900 shadow-sm' 
-                    : 'text-slate-500 hover:text-slate-800'
+                    ? 'bg-white text-[#17202A] shadow-xs border border-[#D9E0E7]' 
+                    : 'text-[#6B7280] hover:text-[#17202A]'
                 }`}
               >
-                <Code2 className="w-3.5 h-3.5 text-indigo-600" />
+                <Code2 className="w-3.5 h-3.5 text-[#4B5563]" />
                 <span>JSON Format</span>
                 {!getDocTypeBadge(selectedDoc).isTabular && (
-                  <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1.5 py-0.2 rounded font-mono font-normal">Primary</span>
+                  <span className="text-[9px] bg-[#E8F1F8] text-[#1F5D8F] px-1.5 py-0.2 rounded-[4px] font-mono font-medium">Primary</span>
                 )}
               </button>
             </div>
@@ -1695,91 +1738,91 @@ export default function Home() {
                 {/* 1. Overview Tabular Grid */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                      <Table className="w-3.5 h-3.5 text-blue-500" />
-                      <span>Tabular Summary Table</span>
+                    <h4 className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-wider flex items-center gap-1.5">
+                      <Table className="w-3.5 h-3.5 text-[#1F5D8F]" />
+                      <span>Extracted Ledger Attributes</span>
                     </h4>
-                    <span className="text-[10px] text-slate-400 font-mono">
+                    <span className="text-[10px] text-[#6B7280] font-mono">
                       Confidence: {Math.round((selectedDoc.confidence_score || 0.95) * 100)}%
                     </span>
                   </div>
 
-                  <div className="overflow-hidden rounded-xl border border-slate-200/80 bg-white">
+                  <div className="overflow-hidden rounded-[6px] border border-[#D9E0E7] bg-white">
                     <table className="w-full text-left border-collapse text-xs">
                       <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200/80 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                          <th className="py-2 px-3 font-semibold">Attribute</th>
-                          <th className="py-2 px-3 font-semibold">Extracted Value</th>
-                          <th className="py-2 px-3 font-semibold text-right">Status</th>
+                        <tr className="bg-[#F8FAFC] border-b border-[#D9E0E7] text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider">
+                          <th className="py-2 px-3">Attribute</th>
+                          <th className="py-2 px-3">Extracted Value</th>
+                          <th className="py-2 px-3 text-right">Status</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700">
+                      <tbody className="divide-y divide-[#D9E0E7] text-[#17202A]">
                         <tr>
-                          <td className="py-2 px-3 text-slate-500 font-medium">Category</td>
-                          <td className="py-2 px-3 font-semibold text-slate-800">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getDocTypeBadge(selectedDoc).bg}`}>
+                          <td className="py-2 px-3 text-[#6B7280] font-medium">Category</td>
+                          <td className="py-2 px-3 font-semibold">
+                            <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-[4px] border ${getDocTypeBadge(selectedDoc).bg}`}>
                               {getDocTypeBadge(selectedDoc).label}
                             </span>
                           </td>
                           <td className="py-2 px-3 text-right">
-                            <span className="text-[10px] font-mono text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                            <span className="text-[10px] font-mono text-[#237A57] bg-[#E8F5EE] px-1.5 py-0.5 rounded-[4px] border border-[#A8D8C1]">
                               Tabular
                             </span>
                           </td>
                         </tr>
                         <tr>
-                          <td className="py-2 px-3 text-slate-500 font-medium">Identifier #</td>
-                          <td className="py-2 px-3 font-mono font-bold text-slate-800">
+                          <td className="py-2 px-3 text-[#6B7280] font-medium">Identifier #</td>
+                          <td className="py-2 px-3 font-mono font-semibold text-[#17202A]">
                             {selectedDoc.extracted_data?.identifier || selectedDoc.extracted_data?.invoice_number || selectedDoc.extracted_data?.account_number || '—'}
                           </td>
-                          <td className="py-2 px-3 text-right text-slate-400 font-mono text-[10px]">Verified</td>
+                          <td className="py-2 px-3 text-right text-[#6B7280] font-mono text-[10px]">Verified</td>
                         </tr>
                         <tr>
-                          <td className="py-2 px-3 text-slate-500 font-medium">Party / Entity</td>
-                          <td className="py-2 px-3 font-medium text-slate-800 truncate max-w-[170px]">
+                          <td className="py-2 px-3 text-[#6B7280] font-medium">Party / Entity</td>
+                          <td className="py-2 px-3 font-medium text-[#17202A] truncate max-w-[170px]">
                             {selectedDoc.extracted_data?.party_name || selectedDoc.extracted_data?.vendor_name || selectedDoc.extracted_data?.merchant_name || selectedDoc.extracted_data?.bank_name || '—'}
                           </td>
-                          <td className="py-2 px-3 text-right text-slate-400 font-mono text-[10px]">Recognized</td>
+                          <td className="py-2 px-3 text-right text-[#6B7280] font-mono text-[10px]">Recognized</td>
                         </tr>
                         {(selectedDoc.extracted_data?.party_tax_id || selectedDoc.extracted_data?.vendor_gstin) && (
                           <tr>
-                            <td className="py-2 px-3 text-slate-500 font-medium">GSTIN / Tax ID</td>
-                            <td className="py-2 px-3 font-mono font-bold text-blue-600">
+                            <td className="py-2 px-3 text-[#6B7280] font-medium">GSTIN / Tax ID</td>
+                            <td className="py-2 px-3 font-mono font-semibold text-[#1F5D8F]">
                               {selectedDoc.extracted_data?.party_tax_id || selectedDoc.extracted_data?.vendor_gstin}
                             </td>
                             <td className="py-2 px-3 text-right">
-                              <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">15-Char Valid</span>
+                              <span className="text-[10px] text-[#1F5D8F] bg-[#E8F1F8] border border-[#A8C6DC] px-1.5 py-0.5 rounded-[4px]">15-Char Valid</span>
                             </td>
                           </tr>
                         )}
                         <tr>
-                          <td className="py-2 px-3 text-slate-500 font-medium">Transaction Date</td>
-                          <td className="py-2 px-3 font-mono text-slate-800">
+                          <td className="py-2 px-3 text-[#6B7280] font-medium">Transaction Date</td>
+                          <td className="py-2 px-3 font-mono text-[#17202A]">
                             {selectedDoc.extracted_data?.date || selectedDoc.extracted_data?.invoice_date || selectedDoc.extracted_data?.receipt_date || selectedDoc.created_at?.slice(0, 10) || '—'}
                           </td>
-                          <td className="py-2 px-3 text-right text-slate-400 font-mono text-[10px]">ISO Date</td>
+                          <td className="py-2 px-3 text-right text-[#6B7280] font-mono text-[10px]">ISO Date</td>
                         </tr>
                         <tr>
-                          <td className="py-2 px-3 text-slate-500 font-medium">Taxable Subtotal</td>
-                          <td className="py-2 px-3 font-mono font-medium text-slate-800">
+                          <td className="py-2 px-3 text-[#6B7280] font-medium">Taxable Subtotal</td>
+                          <td className="py-2 px-3 font-mono font-medium text-[#17202A]">
                             ₹{Number(selectedDoc.extracted_data?.subtotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
-                          <td className="py-2 px-3 text-right text-slate-400 font-mono text-[10px]">Taxable</td>
+                          <td className="py-2 px-3 text-right text-[#6B7280] font-mono text-[10px]">Taxable</td>
                         </tr>
                         <tr>
-                          <td className="py-2 px-3 text-slate-500 font-medium">Taxes (GST Total)</td>
-                          <td className="py-2 px-3 font-mono font-medium text-slate-800">
+                          <td className="py-2 px-3 text-[#6B7280] font-medium">Taxes (GST Total)</td>
+                          <td className="py-2 px-3 font-mono font-medium text-[#17202A]">
                             ₹{Number(selectedDoc.extracted_data?.tax_total ?? selectedDoc.extracted_data?.tax ?? ((Number(selectedDoc.extracted_data?.cgst) || 0) + (Number(selectedDoc.extracted_data?.sgst) || 0))).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
-                          <td className="py-2 px-3 text-right text-slate-400 font-mono text-[10px]">18% GST</td>
+                          <td className="py-2 px-3 text-right text-[#6B7280] font-mono text-[10px]">GST Total</td>
                         </tr>
-                        <tr className="bg-slate-50/80 font-bold">
-                          <td className="py-2.5 px-3 text-slate-800 font-bold">Grand Total</td>
-                          <td className={`py-2.5 px-3 font-mono text-sm ${selectedDoc.status === 'needs_review' ? 'text-amber-600' : 'text-slate-900'}`}>
+                        <tr className="bg-[#F8FAFC] font-bold">
+                          <td className="py-2.5 px-3 text-[#17202A]">Grand Total</td>
+                          <td className={`py-2.5 px-3 font-mono text-sm ${selectedDoc.status === 'needs_review' ? 'text-[#9A6700]' : 'text-[#17202A]'}`}>
                             ₹{Number(selectedDoc.extracted_data?.grand_total ?? selectedDoc.extracted_data?.total ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </td>
                           <td className="py-2.5 px-3 text-right">
-                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${selectedDoc.status === 'needs_review' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-[4px] font-semibold ${selectedDoc.status === 'needs_review' ? 'bg-[#FFF5D6] text-[#9A6700] border border-[#E7CA75]' : 'bg-[#E8F5EE] text-[#237A57] border border-[#A8D8C1]'}`}>
                               {selectedDoc.status === 'needs_review' ? 'Discrepancy' : 'Checks Passed'}
                             </span>
                           </td>
@@ -1792,14 +1835,14 @@ export default function Home() {
                 {/* 2. Tabular Line Items / Transactions */}
                 {Array.isArray(selectedDoc.extracted_data?.transactions) && selectedDoc.extracted_data.transactions.length > 0 ? (
                   <div className="space-y-2">
-                    <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-sky-500" />
+                    <h4 className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-wider flex items-center gap-1.5">
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-[#1F5D8F]" />
                       <span>Bank Statement Transactions ({selectedDoc.extracted_data.transactions.length})</span>
                     </h4>
-                    <div className="overflow-x-auto rounded-xl border border-slate-200/80 bg-white">
+                    <div className="overflow-x-auto rounded-[6px] border border-[#D9E0E7] bg-white">
                       <table className="w-full text-left border-collapse text-[11px]">
                         <thead>
-                          <tr className="bg-slate-50 border-b border-slate-200/80 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          <tr className="bg-[#F8FAFC] border-b border-[#D9E0E7] text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider">
                             <th className="py-2 px-2.5">Date</th>
                             <th className="py-2 px-2.5">Narration</th>
                             <th className="py-2 px-2.5 text-right">Debit (₹)</th>
@@ -1807,14 +1850,14 @@ export default function Home() {
                             <th className="py-2 px-2.5 text-right">Balance (₹)</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700 font-mono">
+                        <tbody className="divide-y divide-[#D9E0E7] text-[#17202A] font-mono">
                           {selectedDoc.extracted_data.transactions.map((tx: any, idx: number) => (
-                            <tr key={idx} className="hover:bg-slate-50">
-                              <td className="py-2 px-2.5 text-slate-600 whitespace-nowrap">{tx.date || tx.txn_date || '—'}</td>
-                              <td className="py-2 px-2.5 font-sans font-medium text-slate-800 truncate max-w-[120px]">{tx.narration || 'Transaction'}</td>
-                              <td className="py-2 px-2.5 text-right text-rose-600">{Number(tx.debit || 0) > 0 ? `₹${Number(tx.debit).toLocaleString()}` : '—'}</td>
-                              <td className="py-2 px-2.5 text-right text-emerald-600">{Number(tx.credit || 0) > 0 ? `₹${Number(tx.credit).toLocaleString()}` : '—'}</td>
-                              <td className="py-2 px-2.5 text-right text-slate-900 font-semibold">₹{Number(tx.balance || 0).toLocaleString()}</td>
+                            <tr key={idx} className="hover:bg-[#F8FAFC]">
+                              <td className="py-2 px-2.5 text-[#6B7280] whitespace-nowrap">{tx.date || tx.txn_date || '—'}</td>
+                              <td className="py-2 px-2.5 font-sans font-medium text-[#17202A] truncate max-w-[120px]">{tx.narration || 'Transaction'}</td>
+                              <td className="py-2 px-2.5 text-right text-[#B33A3A]">{Number(tx.debit || 0) > 0 ? `₹${Number(tx.debit).toLocaleString()}` : '—'}</td>
+                              <td className="py-2 px-2.5 text-right text-[#237A57]">{Number(tx.credit || 0) > 0 ? `₹${Number(tx.credit).toLocaleString()}` : '—'}</td>
+                              <td className="py-2 px-2.5 text-right text-[#17202A] font-semibold">₹{Number(tx.balance || 0).toLocaleString()}</td>
                             </tr>
                           ))}
                         </tbody>
@@ -1823,14 +1866,14 @@ export default function Home() {
                   </div>
                 ) : Array.isArray(selectedDoc.extracted_data?.line_items) && selectedDoc.extracted_data.line_items.length > 0 ? (
                   <div className="space-y-2">
-                    <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                      <Table className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>Line Items Tabular Breakdown ({selectedDoc.extracted_data.line_items.length})</span>
+                    <h4 className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-wider flex items-center gap-1.5">
+                      <Table className="w-3.5 h-3.5 text-[#1F5D8F]" />
+                      <span>Line Items Breakdown ({selectedDoc.extracted_data.line_items.length})</span>
                     </h4>
-                    <div className="overflow-x-auto rounded-xl border border-slate-200/80 bg-white">
+                    <div className="overflow-x-auto rounded-[6px] border border-[#D9E0E7] bg-white">
                       <table className="w-full text-left border-collapse text-[11px]">
                         <thead>
-                          <tr className="bg-slate-50 border-b border-slate-200/80 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                          <tr className="bg-[#F8FAFC] border-b border-[#D9E0E7] text-[10px] font-semibold text-[#4B5563] uppercase tracking-wider">
                             <th className="py-2 px-2.5">Item Description</th>
                             <th className="py-2 px-2 text-center">Qty</th>
                             <th className="py-2 px-2 text-right">Rate</th>
@@ -1838,16 +1881,16 @@ export default function Home() {
                             <th className="py-2 px-2.5 text-right">Amount (₹)</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100 text-slate-700 font-mono">
+                        <tbody className="divide-y divide-[#D9E0E7] text-[#17202A] font-mono">
                           {selectedDoc.extracted_data.line_items.map((item: any, idx: number) => (
-                            <tr key={idx} className="hover:bg-slate-50">
-                              <td className="py-2 px-2.5 font-sans font-medium text-slate-800 truncate max-w-[130px]">
+                            <tr key={idx} className="hover:bg-[#F8FAFC]">
+                              <td className="py-2 px-2.5 font-sans font-medium text-[#17202A] truncate max-w-[130px]">
                                 {item.description || `Item #${idx + 1}`}
                               </td>
-                              <td className="py-2 px-2 text-center text-slate-600">{item.quantity || item.qty || 1}</td>
-                              <td className="py-2 px-2 text-right text-slate-600">₹{Number(item.unit_price || item.rate || 0).toLocaleString()}</td>
-                              <td className="py-2 px-2 text-right text-slate-500">{item.tax_rate || 18}%</td>
-                              <td className="py-2 px-2.5 text-right font-semibold text-slate-900">
+                              <td className="py-2 px-2 text-center text-[#4B5563]">{item.quantity || item.qty || 1}</td>
+                              <td className="py-2 px-2 text-right text-[#4B5563]">₹{Number(item.unit_price || item.rate || 0).toLocaleString()}</td>
+                              <td className="py-2 px-2 text-right text-[#6B7280]">{item.tax_rate || 18}%</td>
+                              <td className="py-2 px-2.5 text-right font-semibold text-[#17202A]">
                                 ₹{Number(item.amount || (Number(item.rate || 0) * (item.qty || 1))).toLocaleString()}
                               </td>
                             </tr>
@@ -1858,31 +1901,31 @@ export default function Home() {
                   </div>
                 ) : null}
 
-                {/* 3. Deterministic Arithmetic Math Check Table */}
-                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
-                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
+                {/* 3. Deterministic Arithmetic Verification Card */}
+                <div className="p-3 bg-[#F8FAFC] rounded-[6px] border border-[#D9E0E7] space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-semibold text-[#17202A]">
                     <span className="flex items-center gap-1.5">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#237A57]" />
                       <span>Deterministic Rule Engine Verification</span>
                     </span>
-                    <span className="text-[10px] font-mono text-slate-400">Zero-LLM Math</span>
+                    <span className="text-[10px] font-mono text-[#6B7280]">Exact Formula</span>
                   </div>
                   <div className="grid grid-cols-3 gap-2 pt-1 text-center font-mono text-[10px]">
-                    <div className="bg-white p-2 rounded-lg border border-slate-200/80">
-                      <span className="text-slate-400 block uppercase">Subtotal</span>
-                      <span className="font-bold text-slate-800 text-xs mt-0.5 block">
+                    <div className="bg-white p-2 rounded-[6px] border border-[#D9E0E7]">
+                      <span className="text-[#6B7280] block uppercase">Subtotal</span>
+                      <span className="font-semibold text-[#17202A] text-xs mt-0.5 block">
                         ₹{Number(selectedDoc.extracted_data?.subtotal || 0).toLocaleString()}
                       </span>
                     </div>
-                    <div className="bg-white p-2 rounded-lg border border-slate-200/80">
-                      <span className="text-slate-400 block uppercase">Taxes</span>
-                      <span className="font-bold text-slate-800 text-xs mt-0.5 block">
+                    <div className="bg-white p-2 rounded-[6px] border border-[#D9E0E7]">
+                      <span className="text-[#6B7280] block uppercase">Taxes</span>
+                      <span className="font-semibold text-[#17202A] text-xs mt-0.5 block">
                         +₹{Number(selectedDoc.extracted_data?.tax_total ?? selectedDoc.extracted_data?.tax ?? 0).toLocaleString()}
                       </span>
                     </div>
-                    <div className="bg-white p-2 rounded-lg border border-slate-200/80">
-                      <span className="text-slate-400 block uppercase">Calculated</span>
-                      <span className="font-bold text-blue-600 text-xs mt-0.5 block">
+                    <div className="bg-white p-2 rounded-[6px] border border-[#D9E0E7]">
+                      <span className="text-[#6B7280] block uppercase">Calculated</span>
+                      <span className="font-semibold text-[#1F5D8F] text-xs mt-0.5 block">
                         =₹{Number((Number(selectedDoc.extracted_data?.subtotal || 0) + Number(selectedDoc.extracted_data?.tax_total ?? selectedDoc.extracted_data?.tax ?? 0))).toLocaleString()}
                       </span>
                     </div>
@@ -1894,56 +1937,53 @@ export default function Home() {
             {/* TAB 2: JSON FORMAT (For Category 'Others' or Full Data Inspection) */}
             {drawerTab === 'json' && (
               <div className="space-y-3">
-                {/* JSON Header Notice */}
-                <div className="p-3 bg-slate-100 rounded-xl border border-slate-200 text-slate-700 flex items-center justify-between">
+                <div className="p-3 bg-[#F8FAFC] rounded-[6px] border border-[#D9E0E7] text-[#17202A] flex items-center justify-between">
                   <div>
-                    <div className="font-bold text-slate-800 flex items-center gap-1.5 text-xs">
-                      <Code2 className="w-4 h-4 text-indigo-600" />
-                      <span>Structured JSON Format</span>
+                    <div className="font-semibold text-[#17202A] flex items-center gap-1.5 text-xs">
+                      <Code2 className="w-4 h-4 text-[#1F5D8F]" />
+                      <span>Structured Financial JSON</span>
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-0.5">
+                    <p className="text-[11px] text-[#4B5563] mt-0.5">
                       {selectedDoc.document_type === 'others' 
                         ? 'Unstructured document: Fields captured as dynamic key-value JSON schema.' 
-                        : 'Normalized full payload representation.'}
+                        : 'Normalized full payload schema.'}
                     </p>
                   </div>
                   <button
                     type="button"
                     onClick={() => handleCopyJson(selectedDoc.extracted_data)}
-                    className="px-2.5 py-1.5 bg-white hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold border border-slate-300 flex items-center gap-1 transition-colors shadow-sm"
+                    className="px-2.5 py-1.5 bg-white hover:bg-[#F8FAFC] text-[#17202A] rounded-[6px] text-xs font-medium border border-[#D9E0E7] flex items-center gap-1 transition-colors"
                   >
-                    {copiedJson ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-500" />}
+                    {copiedJson ? <Check className="w-3.5 h-3.5 text-[#237A57]" /> : <Copy className="w-3.5 h-3.5 text-[#6B7280]" />}
                     <span>{copiedJson ? 'Copied' : 'Copy'}</span>
                   </button>
                 </div>
 
-                {/* Detected Fields if category is others */}
                 {selectedDoc.extracted_data?.detected_fields && Object.keys(selectedDoc.extracted_data.detected_fields).length > 0 && (
-                  <div className="p-3 bg-white rounded-xl border border-slate-200/80 space-y-2">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  <div className="p-3 bg-white rounded-[6px] border border-[#D9E0E7] space-y-2">
+                    <span className="text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider block">
                       Detected Freeform Fields ({Object.keys(selectedDoc.extracted_data.detected_fields).length})
                     </span>
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       {Object.entries(selectedDoc.extracted_data.detected_fields).map(([k, v]: [string, any]) => (
-                        <div key={k} className="p-2 bg-slate-50 rounded-lg border border-slate-100">
-                          <span className="text-[10px] font-mono text-slate-400 uppercase block">{k}</span>
-                          <span className="font-medium text-slate-800 truncate block mt-0.5">{String(v)}</span>
+                        <div key={k} className="p-2 bg-[#F8FAFC] rounded-[6px] border border-[#D9E0E7]">
+                          <span className="text-[10px] font-mono text-[#6B7280] uppercase block">{k}</span>
+                          <span className="font-medium text-[#17202A] truncate block mt-0.5">{String(v)}</span>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Interactive Syntax-Styled JSON Block */}
-                <div className="relative rounded-xl border border-slate-800 bg-slate-900 text-slate-100 overflow-hidden shadow-inner">
-                  <div className="flex items-center justify-between px-3.5 py-2 bg-slate-800/90 border-b border-slate-700/60 text-[10px] font-mono text-slate-400">
+                <div className="relative rounded-[6px] border border-[#2D425C] bg-[#172332] text-white overflow-hidden shadow-inner">
+                  <div className="flex items-center justify-between px-3.5 py-2 bg-[#172332] border-b border-[#2D425C] text-[10px] font-mono text-[#94A3B8]">
                     <span className="flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      <span className="w-2 h-2 rounded-full bg-[#237A57]"></span>
                       <span>category_{selectedDoc.document_type || 'others'}.json</span>
                     </span>
                     <span>{JSON.stringify(selectedDoc.extracted_data).length} bytes</span>
                   </div>
-                  <pre className="p-3.5 text-[11px] font-mono leading-relaxed overflow-x-auto max-h-80 text-emerald-400 selection:bg-slate-700 whitespace-pre-wrap">
+                  <pre className="p-3.5 text-[11px] font-mono leading-relaxed overflow-x-auto max-h-80 text-[#A8D8C1] whitespace-pre-wrap">
                     {JSON.stringify(selectedDoc.extracted_data, null, 2)}
                   </pre>
                 </div>
@@ -1952,28 +1992,28 @@ export default function Home() {
 
             {/* Raw OCR Transcription Toggle */}
             {selectedDoc.extracted_data?.raw_text && (
-              <div className="space-y-1.5 pt-2 border-t border-slate-100">
-                <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+              <div className="space-y-1.5 pt-2 border-t border-[#D9E0E7]">
+                <h4 className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-wider">
                   Raw OCR Transcription (RapidOCR)
                 </h4>
-                <pre className="text-[10px] text-slate-600 font-mono bg-slate-50 p-2.5 rounded-xl border border-slate-100 max-h-28 overflow-y-auto whitespace-pre-wrap">
+                <pre className="text-[10px] text-[#4B5563] font-mono bg-[#F8FAFC] p-2.5 rounded-[6px] border border-[#D9E0E7] max-h-28 overflow-y-auto whitespace-pre-wrap">
                   {selectedDoc.extracted_data.raw_text}
                 </pre>
               </div>
             )}
 
             {/* Live Document Preview */}
-            <div className="space-y-2 pt-3 border-t border-slate-100">
+            <div className="space-y-2 pt-3 border-t border-[#D9E0E7]">
               <div className="flex items-center justify-between">
-                <h4 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <Eye className="w-3.5 h-3.5 text-blue-500" />
+                <h4 className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-wider flex items-center gap-1.5">
+                  <Eye className="w-3.5 h-3.5 text-[#1F5D8F]" />
                   <span>Document File Preview</span>
                 </h4>
                 <a
                   href={`http://127.0.0.1:8000/api/v1/documents/${selectedDoc.id}/file`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-[10px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 hover:underline"
+                  className="text-[10px] text-[#1F5D8F] hover:text-[#174A73] font-semibold flex items-center gap-1 hover:underline"
                 >
                   <ExternalLink className="w-3 h-3" />
                   <span>Open Raw File</span>
@@ -1989,23 +2029,23 @@ export default function Home() {
 
                 if (isImage) {
                   return (
-                    <div className="relative group rounded-xl overflow-hidden border border-slate-200/80 bg-slate-900/5 p-2 flex flex-col items-center justify-center">
-                      <div className="w-full flex items-center justify-center min-h-[200px] max-h-[380px] overflow-hidden rounded-lg bg-white/60">
+                    <div className="relative group rounded-[6px] overflow-hidden border border-[#D9E0E7] bg-[#F8FAFC] p-2 flex flex-col items-center justify-center">
+                      <div className="w-full flex items-center justify-center min-h-[200px] max-h-[380px] overflow-hidden rounded-[4px] bg-white">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={fileUrl}
                           alt={selectedDoc.original_filename}
-                          className="max-h-[360px] w-auto max-w-full object-contain rounded-md shadow-xs transition-transform duration-200 group-hover:scale-[1.02] cursor-zoom-in"
+                          className="max-h-[360px] w-auto max-w-full object-contain rounded-[4px] shadow-xs cursor-zoom-in"
                           onClick={() => window.open(fileUrl, '_blank')}
                         />
                       </div>
-                      <div className="w-full mt-2 flex items-center justify-between text-[11px] text-slate-500 px-1">
-                        <span className="truncate max-w-[200px] font-medium">{selectedDoc.original_filename}</span>
+                      <div className="w-full mt-2 flex items-center justify-between text-[11px] text-[#6B7280] px-1">
+                        <span className="truncate max-w-[200px] font-medium text-[#17202A]">{selectedDoc.original_filename}</span>
                         <a
                           href={fileUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="px-2 py-0.5 rounded-md bg-slate-900 text-white text-[10px] font-semibold hover:bg-slate-800 transition-colors flex items-center gap-1 shrink-0"
+                          className="px-2 py-0.5 rounded-[4px] bg-[#172332] text-white text-[10px] font-semibold hover:bg-[#223247] transition-colors flex items-center gap-1 shrink-0"
                         >
                           <ExternalLink className="w-2.5 h-2.5" />
                           <span>Full View</span>
@@ -2017,19 +2057,19 @@ export default function Home() {
 
                 if (isPdf) {
                   return (
-                    <div className="rounded-xl overflow-hidden border border-slate-200/80 bg-white">
+                    <div className="rounded-[6px] overflow-hidden border border-[#D9E0E7] bg-white">
                       <iframe
                         src={fileUrl}
-                        className="w-full h-72 border-0 bg-slate-50"
+                        className="w-full h-72 border-0 bg-[#F8FAFC]"
                         title={selectedDoc.original_filename}
                       />
-                      <div className="p-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-                        <span className="truncate max-w-[200px] font-medium">{selectedDoc.original_filename}</span>
+                      <div className="p-2 bg-[#F8FAFC] border-t border-[#D9E0E7] flex items-center justify-between text-[11px] text-[#6B7280]">
+                        <span className="truncate max-w-[200px] font-medium text-[#17202A]">{selectedDoc.original_filename}</span>
                         <a
                           href={fileUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1"
+                          className="text-[#1F5D8F] hover:text-[#174A73] font-semibold flex items-center gap-1"
                         >
                           <ExternalLink className="w-3 h-3" />
                           <span>Popout PDF</span>
@@ -2040,19 +2080,19 @@ export default function Home() {
                 }
 
                 return (
-                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between">
+                  <div className="p-4 rounded-[6px] border border-[#D9E0E7] bg-[#F8FAFC] flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
-                      <FileSpreadsheet className="w-5 h-5 text-slate-500" />
+                      <FileSpreadsheet className="w-5 h-5 text-[#6B7280]" />
                       <div>
-                        <div className="text-xs font-semibold text-slate-800">{selectedDoc.original_filename}</div>
-                        <div className="text-[10px] text-slate-400">{selectedDoc.mime_type || 'Document file'}</div>
+                        <div className="text-xs font-semibold text-[#17202A]">{selectedDoc.original_filename}</div>
+                        <div className="text-[10px] text-[#6B7280]">{selectedDoc.mime_type || 'Document file'}</div>
                       </div>
                     </div>
                     <a
                       href={fileUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="px-3 py-1 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-100 flex items-center gap-1.5"
+                      className="px-3 py-1 rounded-[6px] bg-white border border-[#D9E0E7] text-xs font-semibold text-[#17202A] hover:bg-[#F8FAFC] flex items-center gap-1.5"
                     >
                       <ExternalLink className="w-3 h-3" />
                       <span>Download / View</span>
@@ -2064,19 +2104,19 @@ export default function Home() {
           </div>
 
           {/* Drawer Footer Actions */}
-          <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/50">
+          <div className="p-4 border-t border-[#D9E0E7] flex items-center justify-between bg-[#F8FAFC]">
             {selectedDoc.review_status === 'approved_by_ca' ? (
-              <span className="text-xs font-semibold text-teal-600 flex items-center gap-1">
-                <CheckCheck className="w-4 h-4 text-teal-500" />
-                <span>Approved by {selectedDoc.reviewed_by || 'CA'}</span>
+              <span className="text-xs font-semibold text-[#237A57] flex items-center gap-1.5 bg-[#E8F5EE] border border-[#A8D8C1] px-3 py-1.5 rounded-[6px] w-full justify-center">
+                <CheckCheck className="w-4 h-4 text-[#237A57]" />
+                <span>Approved by {selectedDoc.reviewed_by || 'Chartered Accountant'}</span>
               </span>
             ) : (
               <button
                 onClick={() => handleApprove(selectedDoc.id)}
-                className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow-sm transition-colors flex items-center justify-center gap-1.5"
+                className="w-full py-2 bg-[#237A57] hover:bg-[#1A5C41] text-white rounded-[6px] text-xs font-semibold shadow-xs transition-colors flex items-center justify-center gap-1.5"
               >
                 <CheckCheck className="w-4 h-4" />
-                <span>Approve Accounting Treatment</span>
+                <span>Approve Extracted Record</span>
               </button>
             )}
           </div>
@@ -2086,26 +2126,26 @@ export default function Home() {
       {/* Delete Confirmation Modal */}
       {docToDelete && (
         <div 
-          className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-[#172332]/40 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onClick={() => !isDeleting && setDocToDelete(null)}
         >
           <div 
-            className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150"
+            className="bg-white rounded-[8px] p-6 max-w-sm w-full shadow-lg border border-[#D9E0E7] animate-in fade-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="w-12 h-12 rounded-full bg-rose-50 text-rose-600 flex items-center justify-center mb-4">
-              <Trash2 className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-[6px] bg-[#FDECEC] text-[#B33A3A] border border-[#E8AAAA] flex items-center justify-center mb-4">
+              <Trash2 className="w-5 h-5" />
             </div>
-            <h3 className="text-base font-bold text-slate-900">Delete uploaded file?</h3>
-            <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
-              Are you sure you want to delete <strong className="text-slate-800 font-semibold">{docToDelete.original_filename}</strong>? This will permanently remove the file from storage, extracted OCR data, and associated audit records.
+            <h3 className="text-base font-semibold text-[#17202A]">Delete uploaded file?</h3>
+            <p className="text-xs text-[#4B5563] mt-1.5 leading-relaxed">
+              Are you sure you want to delete <strong className="text-[#17202A] font-semibold">{docToDelete.original_filename}</strong>? This will permanently remove the file from secure storage, extracted OCR data, and related audit events.
             </p>
             <div className="flex items-center justify-end gap-2.5 mt-6">
               <button
                 type="button"
                 disabled={isDeleting}
                 onClick={() => setDocToDelete(null)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors"
+                className="px-3.5 py-1.5 rounded-[6px] text-xs font-semibold text-[#4B5563] border border-[#D9E0E7] hover:bg-[#F8FAFC] transition-colors"
               >
                 Cancel
               </button>
@@ -2113,7 +2153,7 @@ export default function Home() {
                 type="button"
                 disabled={isDeleting}
                 onClick={() => handleDeleteDoc(docToDelete.id)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white shadow-sm shadow-rose-200 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                className="px-3.5 py-1.5 rounded-[6px] text-xs font-semibold bg-[#B33A3A] hover:bg-[#922828] text-white transition-colors flex items-center gap-1.5 disabled:opacity-50"
               >
                 {isDeleting ? 'Deleting...' : 'Delete File'}
               </button>
@@ -2125,19 +2165,19 @@ export default function Home() {
       {/* All Uploads Manager Modal */}
       {showAllUploadsModal && (
         <div 
-          className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-[#172332]/40 backdrop-blur-xs z-50 flex items-center justify-center p-4"
           onClick={() => setShowAllUploadsModal(false)}
         >
           <div 
-            className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-200 max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-150 overflow-hidden"
+            className="bg-white rounded-[8px] max-w-2xl w-full shadow-lg border border-[#D9E0E7] max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-150 overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+            <div className="p-4 border-b border-[#D9E0E7] bg-[#F8FAFC] flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <UploadCloud className="w-5 h-5 text-blue-600" />
-                <h2 className="text-sm font-bold text-slate-800">
-                  Uploaded Financial Files ({documents.length})
+                <UploadCloud className="w-5 h-5 text-[#1F5D8F]" />
+                <h2 className="text-sm font-semibold text-[#17202A]">
+                  Uploaded Financial Documents ({documents.length})
                 </h2>
               </div>
               <div className="flex items-center gap-2">
@@ -2146,14 +2186,14 @@ export default function Home() {
                     setShowAllUploadsModal(false);
                     fileInputRef.current?.click();
                   }}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1 shadow-sm transition-colors"
+                  className="px-3 py-1.5 bg-[#1F5D8F] hover:bg-[#174A73] text-white rounded-[6px] text-xs font-semibold flex items-center gap-1 transition-colors"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>Upload New</span>
                 </button>
                 <button
                   onClick={() => setShowAllUploadsModal(false)}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                  className="p-1 rounded-[4px] text-[#6B7280] hover:text-[#17202A] hover:bg-[#EEF2F6]"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -2161,15 +2201,15 @@ export default function Home() {
             </div>
 
             {/* Filter / Search Bar */}
-            <div className="p-3 border-b border-slate-100 bg-slate-50/50">
+            <div className="p-3 border-b border-[#D9E0E7] bg-[#F8FAFC]">
               <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+                <Search className="w-3.5 h-3.5 text-[#6B7280] absolute left-3 top-2.5" />
                 <input
                   type="text"
                   placeholder="Search uploaded files by name..."
                   value={uploadsFilter}
                   onChange={(e) => setUploadsFilter(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs text-slate-700 focus:outline-none focus:border-blue-500"
+                  className="w-full pl-9 pr-3 py-1.5 bg-white border border-[#D9E0E7] rounded-[6px] text-xs text-[#17202A] placeholder-[#9CA3AF] focus:outline-none focus:border-[#1F5D8F]"
                 />
               </div>
             </div>
@@ -2185,21 +2225,21 @@ export default function Home() {
                       openDocDrawer(doc);
                       setShowAllUploadsModal(false);
                     }}
-                    className="flex items-center justify-between p-3 rounded-xl border border-slate-100 hover:bg-slate-50 hover:border-slate-200 cursor-pointer transition-all group"
+                    className="flex items-center justify-between p-3 rounded-[6px] border border-[#D9E0E7] hover:bg-[#F8FAFC] hover:border-[#B8C2CC] cursor-pointer transition-all group"
                   >
                     <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                      <div className="w-8 h-8 rounded-[6px] bg-[#E8F1F8] text-[#1F5D8F] border border-[#A8C6DC] flex items-center justify-center shrink-0">
                         {doc.document_type === 'bank_statement' ? (
-                          <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                          <FileSpreadsheet className="w-4 h-4 text-[#1F5D8F]" />
                         ) : (
-                          <FileText className="w-4 h-4 text-blue-600" />
+                          <FileText className="w-4 h-4 text-[#1F5D8F]" />
                         )}
                       </div>
                       <div className="min-w-0">
-                        <div className="font-semibold text-xs text-slate-800 truncate">
+                        <div className="font-semibold text-xs text-[#17202A] truncate">
                           {doc.original_filename}
                         </div>
-                        <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5 font-mono">
+                        <div className="text-[10px] text-[#6B7280] flex items-center gap-2 mt-0.5 font-mono">
                           <span>{(doc.file_size / 1024).toFixed(1)} KB</span>
                           <span>•</span>
                           <span>{doc.document_type.replace('_', ' ')}</span>
@@ -2211,12 +2251,12 @@ export default function Home() {
 
                     <div className="flex items-center gap-2 shrink-0">
                       {doc.status === 'needs_review' ? (
-                        <span className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200/60 px-2 py-0.5 rounded-full">
-                          ! Review
+                        <span className="text-[10px] font-semibold text-[#9A6700] bg-[#FFF5D6] border border-[#E7CA75] px-2 py-0.5 rounded-[4px]">
+                          Needs Review
                         </span>
                       ) : (
-                        <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200/60 px-2 py-0.5 rounded-full">
-                          ✓ Verified
+                        <span className="text-[10px] font-semibold text-[#237A57] bg-[#E8F5EE] border border-[#A8D8C1] px-2 py-0.5 rounded-[4px]">
+                          Checks Passed
                         </span>
                       )}
                       {renderThreeDotsMenu(doc, true)}
@@ -2224,7 +2264,7 @@ export default function Home() {
                   </div>
                 ))}
               {documents.length === 0 && (
-                <div className="text-center py-8 text-xs text-slate-400">
+                <div className="text-center py-8 text-xs text-[#6B7280]">
                   No uploaded documents found.
                 </div>
               )}
@@ -2233,41 +2273,38 @@ export default function Home() {
         </div>
       )}
 
-      {/* Batch Processing & 6-Category Sorting Animation Modal */}
+      {/* Batch Processing & 6-Category Sorting Modal */}
       {isProcessingBatch && (
         <div 
-          className="fixed inset-0 bg-slate-950/60 backdrop-blur-md z-50 flex items-center justify-center p-4 select-none"
+          className="fixed inset-0 bg-[#172332]/40 backdrop-blur-xs z-50 flex items-center justify-center p-4 select-none"
           onClick={() => batchStage === 'complete' && setIsProcessingBatch(false)}
         >
           <div 
-            className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 p-6 space-y-6 animate-in fade-in zoom-in-95 duration-200 overflow-hidden relative"
+            className="bg-white rounded-[8px] max-w-2xl w-full shadow-lg border border-[#D9E0E7] p-6 space-y-6 animate-in fade-in zoom-in-95 duration-150 overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Shimmer top border line */}
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 animate-pulse"></div>
-
             {/* Modal Header */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center border border-blue-200/60 shadow-sm">
+                <div className="w-10 h-10 rounded-[6px] bg-[#E8F1F8] text-[#1F5D8F] flex items-center justify-center border border-[#A8C6DC]">
                   {batchStage === 'complete' ? (
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                    <CheckCircle2 className="w-5 h-5 text-[#237A57]" />
                   ) : (
-                    <Sparkles className="w-5 h-5 text-blue-600 animate-spin" />
+                    <RefreshCw className="w-5 h-5 text-[#1F5D8F] animate-spin" />
                   )}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-base font-bold text-slate-900">
+                    <h3 className="text-base font-semibold text-[#17202A]">
                       {batchStage === 'complete' 
-                        ? 'Batch Processing Complete!' 
-                        : 'AI Document Categorization Pipeline'}
+                        ? 'Batch Ingestion Complete' 
+                        : 'Document Ingestion & Categorization'}
                     </h3>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-bold border border-blue-200/50">
-                      6 Streams
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded-[4px] bg-[#E8F1F8] text-[#1F5D8F] font-semibold border border-[#A8C6DC]">
+                      6 Registers
                     </span>
                   </div>
-                  <p className="text-xs text-slate-500 mt-0.5 max-w-lg truncate">
+                  <p className="text-xs text-[#4B5563] mt-0.5 max-w-lg truncate">
                     {stepSubtext}
                   </p>
                 </div>
@@ -2276,31 +2313,29 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setIsProcessingBatch(false)}
-                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+                className="p-1.5 rounded-[4px] text-[#6B7280] hover:text-[#17202A] hover:bg-[#F8FAFC] transition-colors"
                 title="Close modal (processing continues in background)"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Live Animated Progress Bar & Multi-Stage Pipeline Tracker */}
+            {/* Live Progress Bar & Multi-Stage Pipeline Tracker */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-700">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-[#17202A]">
                 <span className="flex items-center gap-1.5">
-                  <RefreshCw className={`w-3.5 h-3.5 text-blue-500 ${batchStage !== 'complete' ? 'animate-spin' : ''}`} />
-                  <span className="font-semibold">{stepLabel}</span>
+                  <RefreshCw className={`w-3.5 h-3.5 text-[#1F5D8F] ${batchStage !== 'complete' ? 'animate-spin' : ''}`} />
+                  <span>{stepLabel}</span>
                 </span>
-                <span className="font-mono text-blue-600 font-bold text-xs">
+                <span className="font-mono text-[#1F5D8F] font-semibold text-xs">
                   {uploadProgress}%
                 </span>
               </div>
 
               {/* Progress Bar Track */}
-              <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200/60 shadow-inner">
+              <div className="w-full h-2 bg-[#F8FAFC] rounded-full overflow-hidden border border-[#D9E0E7]">
                 <div 
-                  className={`h-full rounded-full transition-all duration-300 ease-out bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 ${
-                    batchStage !== 'complete' ? 'animate-pulse' : ''
-                  }`}
+                  className="h-full bg-[#1F5D8F] transition-all duration-300 ease-out"
                   style={{
                     width: `${uploadProgress}%`
                   }}
@@ -2309,31 +2344,31 @@ export default function Home() {
 
               {/* 3 Real-Time Visual Step Badges */}
               <div className="grid grid-cols-3 gap-2 pt-0.5 text-[11px]">
-                <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all ${
-                  uploadProgress >= 38 ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80 font-medium' :
-                  'bg-blue-50 text-blue-700 border-blue-200/80 font-semibold shadow-2xs'
+                <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] border transition-all ${
+                  uploadProgress >= 38 ? 'bg-[#E8F5EE] text-[#237A57] border-[#A8D8C1] font-medium' :
+                  'bg-[#E8F1F8] text-[#1F5D8F] border-[#A8C6DC] font-semibold'
                 }`}>
-                  {uploadProgress >= 38 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> : <RefreshCw className="w-3.5 h-3.5 text-blue-600 animate-spin shrink-0" />}
+                  {uploadProgress >= 38 ? <CheckCircle2 className="w-3.5 h-3.5 text-[#237A57] shrink-0" /> : <RefreshCw className="w-3.5 h-3.5 text-[#1F5D8F] animate-spin shrink-0" />}
                   <span className="truncate">1. Ingest & Integrity</span>
                 </div>
-                <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all ${
-                  uploadProgress >= 72 ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80 font-medium' :
-                  uploadProgress >= 38 ? 'bg-blue-50 text-blue-700 border-blue-200/80 font-semibold shadow-2xs' :
-                  'bg-slate-50 text-slate-400 border-slate-200/60'
+                <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] border transition-all ${
+                  uploadProgress >= 72 ? 'bg-[#E8F5EE] text-[#237A57] border-[#A8D8C1] font-medium' :
+                  uploadProgress >= 38 ? 'bg-[#E8F1F8] text-[#1F5D8F] border-[#A8C6DC] font-semibold' :
+                  'bg-[#F8FAFC] text-[#6B7280] border-[#D9E0E7]'
                 }`}>
-                  {uploadProgress >= 72 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> :
-                   uploadProgress >= 38 ? <RefreshCw className="w-3.5 h-3.5 text-blue-600 animate-spin shrink-0" /> :
-                   <div className="w-2 h-2 rounded-full bg-slate-300 ml-0.5 mr-1 shrink-0"></div>}
+                  {uploadProgress >= 72 ? <CheckCircle2 className="w-3.5 h-3.5 text-[#237A57] shrink-0" /> :
+                   uploadProgress >= 38 ? <RefreshCw className="w-3.5 h-3.5 text-[#1F5D8F] animate-spin shrink-0" /> :
+                   <div className="w-2 h-2 rounded-full bg-[#D9E0E7] ml-0.5 mr-1 shrink-0"></div>}
                   <span className="truncate">2. RapidOCR ONNX</span>
                 </div>
-                <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border transition-all ${
-                  batchStage === 'complete' || uploadProgress >= 100 ? 'bg-emerald-50 text-emerald-700 border-emerald-200/80 font-medium' :
-                  uploadProgress >= 72 ? 'bg-blue-50 text-blue-700 border-blue-200/80 font-semibold shadow-2xs' :
-                  'bg-slate-50 text-slate-400 border-slate-200/60'
+                <div className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] border transition-all ${
+                  batchStage === 'complete' || uploadProgress >= 100 ? 'bg-[#E8F5EE] text-[#237A57] border-[#A8D8C1] font-medium' :
+                  uploadProgress >= 72 ? 'bg-[#E8F1F8] text-[#1F5D8F] border-[#A8C6DC] font-semibold' :
+                  'bg-[#F8FAFC] text-[#6B7280] border-[#D9E0E7]'
                 }`}>
-                  {batchStage === 'complete' || uploadProgress >= 100 ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" /> :
-                   uploadProgress >= 72 ? <RefreshCw className="w-3.5 h-3.5 text-blue-600 animate-spin shrink-0" /> :
-                   <div className="w-2 h-2 rounded-full bg-slate-300 ml-0.5 mr-1 shrink-0"></div>}
+                  {batchStage === 'complete' || uploadProgress >= 100 ? <CheckCircle2 className="w-3.5 h-3.5 text-[#237A57] shrink-0" /> :
+                   uploadProgress >= 72 ? <RefreshCw className="w-3.5 h-3.5 text-[#1F5D8F] animate-spin shrink-0" /> :
+                   <div className="w-2 h-2 rounded-full bg-[#D9E0E7] ml-0.5 mr-1 shrink-0"></div>}
                   <span className="truncate">3. Qwen 2.5:3b AI</span>
                 </div>
               </div>
@@ -2341,9 +2376,9 @@ export default function Home() {
 
             {/* 6 Category Stream Sorting Grid */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs font-bold text-slate-500">
-                <span>Real-Time Categorization Streams (6 Fields)</span>
-                <span className="text-[10px] font-normal text-slate-400">5 Tabular + 1 JSON</span>
+              <div className="flex items-center justify-between text-xs font-semibold text-[#4B5563]">
+                <span>Register Categorization Streams</span>
+                <span className="text-[10px] font-normal text-[#6B7280]">5 Tabular + 1 JSON</span>
               </div>
 
               <div className="grid grid-cols-3 gap-2.5">
@@ -2354,71 +2389,210 @@ export default function Home() {
                   return (
                     <div 
                       key={cat.id}
-                      className={`p-3 rounded-2xl border transition-all relative overflow-hidden ${
+                      className={`p-3 rounded-[6px] border transition-all relative ${
                         isPopulated 
-                          ? `${cat.bg} ${cat.border} shadow-sm scale-[1.02]` 
-                          : 'bg-slate-50/70 border-slate-200/70 opacity-70'
+                          ? `${cat.bg} ${cat.border} border` 
+                          : 'bg-[#F8FAFC] border-[#D9E0E7] opacity-80'
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${cat.bg} ${cat.color}`}>
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.2 rounded-[4px] ${cat.bg} ${cat.color}`}>
                           {cat.format}
                         </span>
-                        <span className={`text-base font-bold font-mono ${isPopulated ? cat.color : 'text-slate-400'}`}>
+                        <span className={`text-base font-semibold font-mono ${isPopulated ? cat.color : 'text-[#6B7280]'}`}>
                           {count}
                         </span>
                       </div>
                       <div className="mt-2">
-                        <div className="font-bold text-xs text-slate-800 flex items-center gap-1.5">
+                        <div className="font-semibold text-xs text-[#17202A] flex items-center gap-1.5">
                           {cat.label}
                         </div>
-                        <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                        <div className="text-[10px] text-[#6B7280] truncate mt-0.5">
                           {cat.desc}
                         </div>
                       </div>
-                      {isPopulated && (
-                        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-current opacity-30"></div>
-                      )}
                     </div>
                   );
                 })}
               </div>
             </div>
 
+            {/* Automatic Intake Review & Accounting Transformation Form */}
+            {batchStage === 'complete' && reviewModalDoc && (
+              <div className="bg-[#F8FAFC] border border-[#B3D4EC] rounded-[8px] p-4 shadow-xs space-y-3.5 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between pb-2.5 border-b border-[#D9E0E7]">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded bg-[#1F5D8F]/10 flex items-center justify-center text-[#1F5D8F]">
+                      <Sparkles className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-semibold text-[#17202A]">Review Extracted Values Before Accounting Post</h4>
+                      <p className="text-[10px] text-[#6B7280]">Edit or verify values before generating balanced double-entry journal</p>
+                    </div>
+                  </div>
+                  {uploadedBatchDocs.length > 1 && (
+                    <div className="flex items-center gap-1">
+                      {uploadedBatchDocs.map((doc, idx) => (
+                        <button
+                          key={doc.id}
+                          type="button"
+                          onClick={() => selectDocForReview(doc)}
+                          className={`text-[10px] font-mono px-2 py-0.5 rounded-[4px] border transition-colors ${
+                            reviewModalDoc.id === doc.id
+                              ? 'bg-[#1F5D8F] text-white border-[#1F5D8F] font-semibold'
+                              : 'bg-white text-[#4B5563] border-[#D9E0E7] hover:bg-[#F1F5F9]'
+                          }`}
+                        >
+                          Doc #{idx + 1}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">
+                      Invoice / Ref #
+                    </label>
+                    <input 
+                      type="text" 
+                      value={reviewForm.invoice_number}
+                      onChange={e => setReviewForm(prev => ({ ...prev, invoice_number: e.target.value }))}
+                      className="w-full text-xs font-mono px-2.5 py-1.5 rounded-[4px] border border-[#D9E0E7] focus:border-[#1F5D8F] focus:outline-none bg-white"
+                      placeholder="e.g. INV-2024-001"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">
+                      Date
+                    </label>
+                    <input 
+                      type="date" 
+                      value={reviewForm.date}
+                      onChange={e => setReviewForm(prev => ({ ...prev, date: e.target.value }))}
+                      className="w-full text-xs px-2.5 py-1.5 rounded-[4px] border border-[#D9E0E7] focus:border-[#1F5D8F] focus:outline-none bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">
+                      Vendor / Counterparty
+                    </label>
+                    <input 
+                      type="text" 
+                      value={reviewForm.party_name}
+                      onChange={e => setReviewForm(prev => ({ ...prev, party_name: e.target.value }))}
+                      className="w-full text-xs font-medium px-2.5 py-1.5 rounded-[4px] border border-[#D9E0E7] focus:border-[#1F5D8F] focus:outline-none bg-white"
+                      placeholder="e.g. Acme Corp"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">
+                      Target GL Account
+                    </label>
+                    <select 
+                      value={reviewForm.target_account_code}
+                      onChange={e => setReviewForm(prev => ({ ...prev, target_account_code: e.target.value }))}
+                      className="w-full text-xs px-2 py-1.5 rounded-[4px] border border-[#D9E0E7] focus:border-[#1F5D8F] focus:outline-none bg-white"
+                    >
+                      <option value="5200">5200 - Office Supplies & Expense</option>
+                      <option value="5100">5100 - Cloud Infrastructure & Hosting</option>
+                      <option value="5300">5300 - Travel & Lodging Expense</option>
+                      <option value="5400">5400 - Professional & Legal Fees</option>
+                      <option value="4000">4000 - Sales & Services Revenue</option>
+                      <option value="1000">1000 - Bank / Cash Account</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">
+                      Subtotal (₹)
+                    </label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      value={reviewForm.subtotal}
+                      onChange={e => {
+                        const sub = parseFloat(e.target.value) || 0;
+                        const tax = parseFloat(reviewForm.tax) || 0;
+                        setReviewForm(prev => ({ ...prev, subtotal: e.target.value, total: (sub + tax).toFixed(2) }));
+                      }}
+                      className="w-full text-xs font-mono px-2.5 py-1.5 rounded-[4px] border border-[#D9E0E7] focus:border-[#1F5D8F] focus:outline-none bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-semibold text-[#6B7280] uppercase tracking-wider mb-1">
+                      Tax / GST (₹)
+                    </label>
+                    <input 
+                      type="number" 
+                      step="0.01"
+                      value={reviewForm.tax}
+                      onChange={e => {
+                        const tax = parseFloat(e.target.value) || 0;
+                        const sub = parseFloat(reviewForm.subtotal) || 0;
+                        setReviewForm(prev => ({ ...prev, tax: e.target.value, total: (sub + tax).toFixed(2) }));
+                      }}
+                      className="w-full text-xs font-mono px-2.5 py-1.5 rounded-[4px] border border-[#D9E0E7] focus:border-[#1F5D8F] focus:outline-none bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-[#E8F1F8]/60 border border-[#B3D4EC] rounded-[6px] p-2.5 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold text-[#1F5D8F]">Double-Entry Balancing:</span>
+                    <span className="text-[10px] text-[#4B5563] font-mono">
+                      Dr. #{reviewForm.target_account_code} (₹{Number(reviewForm.subtotal || 0).toLocaleString('en-IN')}) + Dr. ITC (₹{Number(reviewForm.tax || 0).toLocaleString('en-IN')}) = Cr. AP (₹{Number(reviewForm.total || 0).toLocaleString('en-IN')})
+                    </span>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className="text-[10px] text-[#6B7280] block">Grand Total</span>
+                    <span className="font-mono font-bold text-sm text-[#17202A]">
+                      ₹{Number(reviewForm.total || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Uploaded Files Real-Time Feed */}
             {batchFiles.length > 0 && (
               <div className="space-y-1.5">
-                <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
-                  Files in Batch ({batchFiles.length})
+                <span className="text-[11px] font-semibold text-[#6B7280] uppercase tracking-wider block">
+                  Files in Ingestion Batch ({batchFiles.length})
                 </span>
-                <div className="bg-slate-50 rounded-2xl p-2.5 border border-slate-200/80 max-h-36 overflow-y-auto space-y-1.5 text-xs">
+                <div className="bg-[#F8FAFC] rounded-[6px] p-2.5 border border-[#D9E0E7] max-h-36 overflow-y-auto space-y-1.5 text-xs">
                   {batchFiles.map((file, idx) => (
-                    <div key={idx} className="flex items-center justify-between p-1.5 bg-white rounded-xl border border-slate-100 shadow-2xs">
+                    <div key={idx} className="flex items-center justify-between p-2 bg-white rounded-[6px] border border-[#D9E0E7]">
                       <div className="flex items-center gap-2 truncate">
-                        <FileText className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span className="font-medium text-slate-800 truncate max-w-[240px]">{file.name}</span>
-                        <span className="text-[10px] text-slate-400 font-mono">({(file.size / 1024).toFixed(1)} KB)</span>
+                        <FileText className="w-3.5 h-3.5 text-[#6B7280] shrink-0" />
+                        <span className="font-medium text-[#17202A] truncate max-w-[240px]">{file.name}</span>
+                        <span className="text-[10px] text-[#6B7280] font-mono">({(file.size / 1024).toFixed(1)} KB)</span>
                       </div>
                       <div className="shrink-0 flex items-center gap-1.5">
                         {file.status === 'done' ? (
                           <div className="flex items-center gap-1.5">
                             {file.isDuplicate && (
                               <span 
-                                className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-300 flex items-center gap-1 animate-pulse"
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded-[4px] bg-[#FFF5D6] text-[#9A6700] border border-[#E7CA75] flex items-center gap-1"
                                 title={file.duplicateOf ? `Duplicate of ${file.duplicateOf}` : 'Duplicate document'}
                               >
-                                <AlertTriangle className="w-2.5 h-2.5 text-amber-600" />
-                                <span>Duplicate Detected</span>
+                                <AlertTriangle className="w-2.5 h-2.5 text-[#9A6700]" />
+                                <span>Duplicate</span>
                               </span>
                             )}
                             {file.category && (
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getDocTypeBadge(file.category).bg}`}>
+                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-[4px] border ${getDocTypeBadge(file.category).bg}`}>
                                 {getDocTypeBadge(file.category).label}
                               </span>
                             )}
                           </div>
                         ) : (
-                          <span className="text-[10px] text-blue-600 flex items-center gap-1 font-mono">
+                          <span className="text-[10px] text-[#1F5D8F] flex items-center gap-1 font-mono">
                             <RefreshCw className="w-3 h-3 animate-spin" />
                             <span>Processing</span>
                           </span>
@@ -2431,50 +2605,78 @@ export default function Home() {
             )}
 
             {/* Modal Bottom Actions */}
-            <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-              <div className="text-[11px] text-slate-400 flex items-center gap-1.5 font-mono">
-                <span className={`w-2 h-2 rounded-full ${batchStage === 'complete' ? 'bg-emerald-500' : 'bg-blue-500 animate-pulse'} inline-block`}></span>
+            <div className="pt-2 border-t border-[#D9E0E7] flex items-center justify-between">
+              <div className="text-[11px] text-[#6B7280] flex items-center gap-1.5 font-mono">
+                <span className={`w-2 h-2 rounded-full ${batchStage === 'complete' ? 'bg-[#237A57]' : 'bg-[#1F5D8F]'} inline-block`}></span>
                 <span>RapidOCR + Qwen 2.5:3b Local Engine</span>
-                {uploadSeconds > 0 && <span className="text-slate-400 font-semibold">• {uploadSeconds}s elapsed</span>}
+                {uploadSeconds > 0 && <span className="text-[#6B7280] font-semibold">• {uploadSeconds}s elapsed</span>}
               </div>
               <div className="flex items-center gap-2">
-                {batchStage !== 'complete' && (
-                  <button
-                    type="button"
-                    onClick={() => setIsProcessingBatch(false)}
-                    className="px-3.5 py-1.5 rounded-xl text-xs font-medium text-slate-600 hover:bg-slate-100 border border-slate-200 transition-colors"
-                  >
-                    Run in Background
-                  </button>
+                {batchStage !== 'complete' ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setIsProcessingBatch(false)}
+                      className="px-3.5 py-1.5 rounded-[6px] text-xs font-semibold text-[#4B5563] hover:bg-[#F8FAFC] border border-[#D9E0E7] transition-colors"
+                    >
+                      Run in Background
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      className="px-5 py-2 rounded-[6px] text-xs font-semibold bg-[#F8FAFC] text-[#9CA3AF] border border-[#D9E0E7] cursor-not-allowed flex items-center gap-1.5"
+                    >
+                      <span>Processing...</span>
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsProcessingBatch(false);
+                        setReviewModalDoc(null);
+                      }}
+                      className="px-3.5 py-2 rounded-[6px] text-xs font-semibold text-[#4B5563] hover:bg-[#F8FAFC] border border-[#D9E0E7] transition-colors"
+                    >
+                      Keep as Draft Registers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleConfirmAndPostToPipeline}
+                      disabled={isPostingToPipeline}
+                      className="px-5 py-2 rounded-[6px] text-xs font-semibold bg-[#237A57] hover:bg-[#1B6145] text-white transition-all flex items-center gap-1.5 shadow-sm"
+                    >
+                      {isPostingToPipeline ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Posting to General Ledger...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Confirm Changes & Post to Accounting Pipeline →</span>
+                        </>
+                      )}
+                    </button>
+                  </>
                 )}
-                <button
-                  type="button"
-                  onClick={() => setIsProcessingBatch(false)}
-                  disabled={batchStage !== 'complete'}
-                  className={`px-5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                    batchStage === 'complete' 
-                      ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-200' 
-                      : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                  }`}
-                >
-                  <span>{batchStage === 'complete' ? 'Inspect Categorized Documents' : 'Processing...'}</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
               </div>
             </div>
           </div>
         </div>
+
       )}
 
-      {/* Floating Action Toast Notification (Positioned Top-Right so it NEVER overlaps the bottom chat bar) */}
+      {/* Floating Action Toast Notification */}
       {showToast && (
-        <div className="fixed top-6 right-8 bg-slate-900/95 backdrop-blur-md text-white text-xs font-medium px-4 py-3 rounded-2xl shadow-2xl z-50 flex items-center gap-2.5 border border-slate-800 animate-in fade-in slide-in-from-top-3 duration-200">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+        <div className="fixed top-6 right-8 bg-[#172332] text-white text-xs font-medium px-4 py-3 rounded-[6px] shadow-lg z-50 flex items-center gap-2.5 border border-[#2D425C] animate-in fade-in slide-in-from-top-3 duration-200">
+          <CheckCircle2 className="w-4 h-4 text-[#A8D8C1] shrink-0" />
           <span className="max-w-xs leading-snug">{showToast}</span>
           <button 
             type="button"
             onClick={() => setShowToast(null)} 
-            className="text-slate-400 hover:text-white ml-2 transition-colors p-0.5 rounded"
+            className="text-[#94A3B8] hover:text-white ml-2 transition-colors p-0.5 rounded"
             title="Dismiss notification"
           >
             <X className="w-3.5 h-3.5" />

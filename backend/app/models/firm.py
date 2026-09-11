@@ -17,6 +17,7 @@ class Firm(Base, TimestampMixin):
     is_active = Column(Boolean, default=True, nullable=False)
 
     users = relationship("User", back_populates="firm", cascade="all, delete-orphan")
+    businesses = relationship("BusinessAccount", back_populates="firm", cascade="all, delete-orphan")
     sessions = relationship("SessionRecord", back_populates="firm", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="firm")
     extracted_records = relationship("ExtractedRecord", back_populates="firm", cascade="all, delete-orphan")

@@ -36,6 +36,10 @@ app.add_middleware(
     expose_headers=["X-CSRF-Token", "X-Request-ID", "Set-Cookie"],
 )
 
+from app.core.rate_limiter import rate_limit_middleware
+
+app.middleware("http")(rate_limit_middleware)
+
 # Security Response Headers & Origin Validation Middleware
 @app.middleware("http")
 async def security_headers_and_origin_guard(request: Request, call_next):

@@ -8,19 +8,16 @@ import {
   Users, 
   CheckCircle2, 
   AlertCircle, 
-  Clock, 
-  Send, 
-  CheckCheck, 
   RefreshCw, 
   ArrowUpRight, 
   ArrowDownLeft, 
   Layers, 
-  FileText, 
-  Sparkles,
-  ChevronRight,
   TrendingUp,
   Download,
-  Filter
+  Check,
+  CheckCheck,
+  Building2,
+  Sparkles
 } from 'lucide-react';
 
 interface JournalLine {
@@ -106,10 +103,20 @@ interface ArApItem {
 
 interface AccountingWorkspaceProps {
   csrfToken?: string;
+  initialSubTab?: 'journals' | 'trial_balance' | 'statements' | 'ar_ap' | 'coa';
 }
 
-export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfToken: initialCsrfToken }) => {
-  const [activeSubTab, setActiveSubTab] = useState<'journals' | 'trial_balance' | 'statements' | 'ar_ap' | 'ledgers' | 'coa'>('journals');
+export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ 
+  csrfToken: initialCsrfToken,
+  initialSubTab = 'journals'
+}) => {
+  const [activeSubTab, setActiveSubTab] = useState<'journals' | 'trial_balance' | 'statements' | 'ar_ap' | 'coa'>(initialSubTab);
+
+  useEffect(() => {
+    if (initialSubTab) {
+      setActiveSubTab(initialSubTab);
+    }
+  }, [initialSubTab]);
   const [loading, setLoading] = useState<boolean>(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [activeCsrfToken, setActiveCsrfToken] = useState<string>(initialCsrfToken || '');
@@ -119,10 +126,10 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
   const [finStatements, setFinStatements] = useState<FinancialStatements | null>(null);
   const [arAp, setArAp] = useState<{ accounts_receivable: { total_outstanding: string; items: ArApItem[] }; accounts_payable: { total_outstanding: string; items: ArApItem[] } } | null>(null);
   const [accounts, setAccounts] = useState<any[]>([]);
+  const [includeDrafts, setIncludeDrafts] = useState<boolean>(false);
 
   const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
-  // Ensure CSRF token is available
   useEffect(() => {
     if (initialCsrfToken) {
       setActiveCsrfToken(initialCsrfToken);
@@ -136,14 +143,15 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
     }
   }, [initialCsrfToken, API_BASE]);
 
-  // Fetch data
-  const fetchData = async () => {
+  const fetchData = async (overrideDrafts?: boolean) => {
     setLoading(true);
+    const useDrafts = overrideDrafts !== undefined ? overrideDrafts : includeDrafts;
+    const q = useDrafts ? '?include_drafts=true' : '';
     try {
       const [jeRes, tbRes, fsRes, arapRes, coaRes] = await Promise.all([
         fetch(`${API_BASE}/api/v1/accounting/journal-entries`, { credentials: 'include' }),
-        fetch(`${API_BASE}/api/v1/accounting/trial-balance`, { credentials: 'include' }),
-        fetch(`${API_BASE}/api/v1/accounting/financial-statements`, { credentials: 'include' }),
+        fetch(`${API_BASE}/api/v1/accounting/trial-balance${q}`, { credentials: 'include' }),
+        fetch(`${API_BASE}/api/v1/accounting/financial-statements${q}`, { credentials: 'include' }),
         fetch(`${API_BASE}/api/v1/accounting/ar-ap`, { credentials: 'include' }),
         fetch(`${API_BASE}/api/v1/accounting/coa`, { credentials: 'include' })
       ]);
@@ -164,20 +172,15 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
     fetchData();
   }, []);
 
-  // Action: Generate Drafts
   const handleGenerateDrafts = async () => {
     setActionLoading('generate');
     try {
       const res = await fetch(`${API_BASE}/api/v1/accounting/generate-drafts`, { 
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'X-CSRF-Token': activeCsrfToken
-        }
+        headers: { 'X-CSRF-Token': activeCsrfToken }
       });
-      if (res.ok) {
-        await fetchData();
-      }
+      if (res.ok) await fetchData();
     } catch (e) {
       console.error(e);
     } finally {
@@ -185,20 +188,15 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
     }
   };
 
-  // Action: Post All Approved
   const handlePostAll = async () => {
     setActionLoading('post_all');
     try {
-      const res = await fetch(`${API_BASE}/api/v1/accounting/post-all`, { 
+      const res = await fetch(`${API_BASE}/api/v1/accounting/post-all?auto_map=true`, { 
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'X-CSRF-Token': activeCsrfToken
-        }
+        headers: { 'X-CSRF-Token': activeCsrfToken }
       });
-      if (res.ok) {
-        await fetchData();
-      }
+      if (res.ok) await fetchData();
     } catch (e) {
       console.error(e);
     } finally {
@@ -206,15 +204,12 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
     }
   };
 
-  // Action: Approve Single Entry
   const handleApproveEntry = async (id: string) => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/accounting/journal-entries/${id}/approve`, { 
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'X-CSRF-Token': activeCsrfToken
-        }
+        headers: { 'X-CSRF-Token': activeCsrfToken }
       });
       if (res.ok) await fetchData();
     } catch (e) {
@@ -222,15 +217,12 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
     }
   };
 
-  // Action: Post Single Entry
   const handlePostEntry = async (id: string) => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/accounting/journal-entries/${id}/post`, { 
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'X-CSRF-Token': activeCsrfToken
-        }
+        headers: { 'X-CSRF-Token': activeCsrfToken }
       });
       if (res.ok) await fetchData();
     } catch (e) {
@@ -238,7 +230,6 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
     }
   };
 
-  // Action: Remap Account Line
   const handleRemapLine = async (entryId: string, lineNumber: number, newAccountCode: string) => {
     try {
       const res = await fetch(`${API_BASE}/api/v1/accounting/journal-entries/${entryId}/lines/${lineNumber}/map`, {
@@ -257,30 +248,30 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
   };
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-900 text-slate-100 overflow-hidden">
-      {/* Top Header Bar */}
-      <div className="px-6 py-4 border-b border-slate-800 bg-slate-950 flex flex-wrap items-center justify-between gap-4">
+    <div className="flex-1 flex flex-col h-full bg-[#F5F7FA] text-[#17202A] overflow-hidden">
+      {/* 1. Page Header */}
+      <div className="px-8 py-5 border-b border-[#D9E0E7] bg-white flex flex-wrap items-center justify-between gap-4 shrink-0">
         <div>
-          <div className="flex items-center gap-2">
-            <h1 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
-              <BookOpen className="w-5 h-5 text-indigo-400" />
-              <span>Double-Entry Accounting & Ledger</span>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-xl font-bold text-[#17202A] tracking-tight flex items-center gap-2">
+              <BookOpen className="w-5 h-5 text-[#1F5D8F]" />
+              <span>Double-Entry Journals & Accounting Reports</span>
             </h1>
-            <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+            <span className="px-2 py-0.5 rounded-[4px] text-[11px] font-semibold bg-[#E8F1F8] text-[#1F5D8F] border border-[#A8C6DC]">
               CA Review Mode
             </span>
           </div>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Automated journal transformation, trial balance verification, and draft financial statements
+          <p className="text-xs text-[#6B7280] mt-1">
+            Automated journal transformation, double-entry verification, and draft financial statements • AiroKnight Studios
           </p>
         </div>
 
         {/* Global Action Buttons */}
         <div className="flex items-center gap-2.5">
           <button
-            onClick={fetchData}
+            onClick={() => fetchData()}
             disabled={loading}
-            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium transition-colors border border-slate-700"
+            className="p-1.5 bg-white hover:bg-[#F8FAFC] text-[#4B5563] rounded-[6px] text-xs font-medium border border-[#D9E0E7] transition-colors shadow-2xs"
             title="Refresh Data"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
@@ -289,7 +280,7 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
           <button
             onClick={handleGenerateDrafts}
             disabled={actionLoading === 'generate'}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-indigo-900/30 transition-all disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#1F5D8F] hover:bg-[#174A73] text-white rounded-[6px] text-xs font-semibold shadow-xs transition-colors disabled:opacity-50"
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span>{actionLoading === 'generate' ? 'Generating...' : 'Generate Draft Journals'}</span>
@@ -298,7 +289,7 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
           <button
             onClick={handlePostAll}
             disabled={actionLoading === 'post_all'}
-            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-emerald-900/30 transition-all disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-[#237A57] hover:bg-[#1B5E43] text-white rounded-[6px] text-xs font-semibold shadow-xs transition-colors disabled:opacity-50"
           >
             <CheckCheck className="w-3.5 h-3.5" />
             <span>{actionLoading === 'post_all' ? 'Posting...' : 'Post All Approved'}</span>
@@ -306,8 +297,8 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
         </div>
       </div>
 
-      {/* Sub-Navigation Tabs */}
-      <div className="px-6 border-b border-slate-800 bg-slate-900/80 flex items-center space-x-1">
+      {/* 2. Sub-Navigation Tabs */}
+      <div className="px-8 border-b border-[#D9E0E7] bg-white flex items-center space-x-2 shrink-0">
         {[
           { id: 'journals', label: 'Journal Register', icon: BookOpen, count: journalEntries.length },
           { id: 'trial_balance', label: 'Trial Balance', icon: Scale },
@@ -321,17 +312,17 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
             <button
               key={tab.id}
               onClick={() => setActiveSubTab(tab.id as any)}
-              className={`flex items-center gap-2 px-4 py-3 text-xs font-medium border-b-2 transition-all ${
+              className={`flex items-center gap-2 px-3.5 py-2.5 text-xs font-medium border-b-2 transition-colors ${
                 isActive
-                  ? 'border-indigo-500 text-indigo-400 bg-slate-800/40'
-                  : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/20'
+                  ? 'border-[#1F5D8F] text-[#1F5D8F] font-semibold bg-[#F8FAFC]'
+                  : 'border-transparent text-[#6B7280] hover:text-[#17202A] hover:bg-[#F8FAFC]'
               }`}
             >
               <Icon className="w-4 h-4" />
               <span>{tab.label}</span>
               {tab.count !== undefined && (
                 <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
-                  isActive ? 'bg-indigo-500/20 text-indigo-300' : 'bg-slate-800 text-slate-500'
+                  isActive ? 'bg-[#E8F1F8] text-[#1F5D8F]' : 'bg-[#EEF2F6] text-[#6B7280]'
                 }`}>
                   {tab.count}
                 </span>
@@ -341,61 +332,59 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
         })}
       </div>
 
-      {/* Main Tab Content Area */}
-      <div className="flex-1 overflow-y-auto p-6">
-        {/* ================================================================= */}
-        {/* TAB 1: JOURNAL REGISTER */}
-        {/* ================================================================= */}
+      {/* 3. Main Tab Content Canvas */}
+      <div className="flex-1 overflow-y-auto p-8">
+        {/* TAB 1: JOURNAL ENTRIES */}
         {activeSubTab === 'journals' && (
-          <div className="space-y-4">
+          <div className="max-w-6xl mx-auto space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-[#17202A] flex items-center gap-2">
                 <span>Journal Entries</span>
-                <span className="text-xs font-normal text-slate-400">({journalEntries.length} total entries)</span>
+                <span className="text-xs font-normal text-[#6B7280]">({journalEntries.length} total entries)</span>
               </h2>
             </div>
 
             {journalEntries.length === 0 ? (
-              <div className="border border-dashed border-slate-800 rounded-xl p-12 text-center">
-                <BookOpen className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-                <h3 className="text-sm font-semibold text-slate-300">No Journal Entries Yet</h3>
-                <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-4">
-                  Click "Generate Draft Journals" to translate your validated invoices and bank transactions into double-entry accounting records.
+              <div className="border border-dashed border-[#D9E0E7] bg-white rounded-[8px] p-12 text-center">
+                <BookOpen className="w-10 h-10 text-[#9CA3AF] mx-auto mb-3" />
+                <h3 className="text-sm font-semibold text-[#17202A]">No Journal Entries Generated</h3>
+                <p className="text-xs text-[#6B7280] max-w-sm mx-auto mt-1 mb-4">
+                  Click &quot;Generate Draft Journals&quot; to translate your validated invoices and bank transactions into balanced double-entry accounting records.
                 </p>
                 <button
                   onClick={handleGenerateDrafts}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold"
+                  className="px-4 py-2 bg-[#1F5D8F] hover:bg-[#174A73] text-white rounded-[6px] text-xs font-semibold shadow-xs"
                 >
                   Generate First Drafts
                 </button>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {journalEntries.map((je) => (
                   <div 
                     key={je.id}
-                    className="bg-slate-950 border border-slate-800 rounded-xl p-4 transition-all hover:border-slate-700"
+                    className="bg-white border border-[#D9E0E7] rounded-[8px] p-4 shadow-xs transition-all hover:border-[#B8C2CC]"
                   >
                     {/* Header Row */}
-                    <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-800/80">
+                    <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#D9E0E7]">
                       <div className="flex items-center gap-3">
-                        <span className="font-mono text-xs font-bold text-indigo-400 bg-indigo-950/50 px-2 py-1 rounded border border-indigo-900/60">
+                        <span className="font-mono text-xs font-bold text-[#1F5D8F] bg-[#E8F1F8] px-2 py-0.5 rounded border border-[#A8C6DC]">
                           {je.entry_number}
                         </span>
-                        <span className="text-xs text-slate-400">{je.posting_date}</span>
-                        <span className="text-xs font-medium text-slate-200">{je.narration}</span>
+                        <span className="text-xs text-[#6B7280] font-mono">{je.posting_date}</span>
+                        <span className="text-xs font-semibold text-[#17202A]">{je.narration}</span>
                       </div>
 
                       <div className="flex items-center gap-2">
                         {/* Status Badge */}
-                        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase tracking-wider ${
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider ${
                           je.status === 'posted'
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                            ? 'bg-[#E8F5EE] text-[#237A57] border border-[#A8D8C1]'
                             : je.status === 'ca_approved'
-                            ? 'bg-blue-500/10 text-blue-400 border border-blue-500/30'
+                            ? 'bg-[#E8F1F8] text-[#1F5D8F] border border-[#A8C6DC]'
                             : je.status === 'needs_mapping'
-                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                            ? 'bg-[#FFF5D6] text-[#9A6700] border border-[#E7CA75]'
+                            : 'bg-[#EEF2F6] text-[#6B7280] border border-[#D9E0E7]'
                         }`}>
                           {je.status.replace('_', ' ')}
                         </span>
@@ -404,7 +393,7 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
                         {je.status === 'ready_for_review' && (
                           <button
                             onClick={() => handleApproveEntry(je.id)}
-                            className="px-2.5 py-1 bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 border border-blue-500/40 rounded text-[11px] font-semibold transition-colors"
+                            className="px-2.5 py-1 bg-[#E8F1F8] hover:bg-[#D4E6F4] text-[#1F5D8F] border border-[#A8C6DC] rounded-[4px] text-[11px] font-semibold transition-colors"
                           >
                             CA Approve
                           </button>
@@ -412,7 +401,7 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
                         {(je.status === 'ca_approved' || je.status === 'ready_for_review') && (
                           <button
                             onClick={() => handlePostEntry(je.id)}
-                            className="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 rounded text-[11px] font-semibold transition-colors"
+                            className="px-2.5 py-1 bg-[#E8F5EE] hover:bg-[#D5EFE1] text-[#237A57] border border-[#A8D8C1] rounded-[4px] text-[11px] font-semibold transition-colors"
                           >
                             Post to GL
                           </button>
@@ -424,26 +413,26 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
                     <div className="mt-3 overflow-x-auto">
                       <table className="w-full text-xs text-left">
                         <thead>
-                          <tr className="text-[11px] text-slate-500 border-b border-slate-900">
-                            <th className="py-1 px-2 font-medium w-16">Account</th>
-                            <th className="py-1 px-2 font-medium">Account Description</th>
-                            <th className="py-1 px-2 font-medium">Sub-ledger / Party</th>
-                            <th className="py-1 px-2 font-medium text-right w-28">Debit (₹)</th>
-                            <th className="py-1 px-2 font-medium text-right w-28">Credit (₹)</th>
+                          <tr className="text-[11px] font-semibold text-[#4B5563] border-b border-[#D9E0E7] bg-[#F8FAFC]">
+                            <th className="py-1.5 px-3 w-20">Account</th>
+                            <th className="py-1.5 px-3">Account Title</th>
+                            <th className="py-1.5 px-3">Sub-ledger / Party</th>
+                            <th className="py-1.5 px-3 text-right w-32">Debit (₹)</th>
+                            <th className="py-1.5 px-3 text-right w-32">Credit (₹)</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-900/40 font-mono">
+                        <tbody className="divide-y divide-[#D9E0E7] font-mono">
                           {je.lines.map((l, idx) => (
-                            <tr key={idx} className="hover:bg-slate-900/30">
-                              <td className="py-1.5 px-2 text-indigo-400 font-semibold">{l.account_code}</td>
-                              <td className="py-1.5 px-2 text-slate-300 font-sans">
+                            <tr key={idx} className="hover:bg-[#F8FAFC]">
+                              <td className="py-2 px-3 text-[#1F5D8F] font-semibold">{l.account_code}</td>
+                              <td className="py-2 px-3 text-[#17202A] font-sans">
                                 {l.account_code === '5900' && je.status !== 'posted' ? (
                                   <div className="flex items-center gap-2">
-                                    <span className="text-amber-400 font-medium">{l.account_name}</span>
+                                    <span className="text-[#9A6700] font-medium">{l.account_name}</span>
                                     <select
                                       onChange={(e) => handleRemapLine(je.id, l.line_number, e.target.value)}
                                       defaultValue=""
-                                      className="bg-slate-900 border border-amber-500/40 text-amber-200 text-[11px] rounded px-2 py-0.5 focus:outline-none focus:border-amber-400 cursor-pointer"
+                                      className="bg-white border border-[#E7CA75] text-[#9A6700] text-[11px] rounded px-2 py-0.5 focus:outline-none focus:border-[#9A6700] cursor-pointer"
                                     >
                                       <option value="" disabled>Map to COA...</option>
                                       {accounts.map(a => (
@@ -455,23 +444,23 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
                                   l.account_name
                                 )}
                               </td>
-                              <td className="py-1.5 px-2 text-slate-400 font-sans">
+                              <td className="py-2 px-3 text-[#6B7280] font-sans">
                                 {l.subledger_name || '—'}
                               </td>
-                              <td className="py-1.5 px-2 text-right text-emerald-400 font-medium">
+                              <td className="py-2 px-3 text-right tabular-nums text-[#237A57] font-medium">
                                 {l.debit !== '—' ? `₹${l.debit}` : '—'}
                               </td>
-                              <td className="py-1.5 px-2 text-right text-slate-300 font-medium">
+                              <td className="py-2 px-3 text-right tabular-nums text-[#17202A] font-medium">
                                 {l.credit !== '—' ? `₹${l.credit}` : '—'}
                               </td>
                             </tr>
                           ))}
                         </tbody>
                         <tfoot>
-                          <tr className="border-t border-slate-800 font-semibold font-mono text-slate-300">
-                            <td colSpan={3} className="py-1.5 px-2 text-right font-sans text-slate-400">Total:</td>
-                            <td className="py-1.5 px-2 text-right text-emerald-400">₹{je.total_debit}</td>
-                            <td className="py-1.5 px-2 text-right text-emerald-400">₹{je.total_credit}</td>
+                          <tr className="border-t-2 border-[#D9E0E7] bg-[#F8FAFC] font-semibold font-mono text-[#17202A]">
+                            <td colSpan={3} className="py-2 px-3 text-right font-sans text-[#4B5563]">Total Balance:</td>
+                            <td className="py-2 px-3 text-right tabular-nums text-[#237A57]">₹{je.total_debit}</td>
+                            <td className="py-2 px-3 text-right tabular-nums text-[#17202A]">₹{je.total_credit}</td>
                           </tr>
                         </tfoot>
                       </table>
@@ -483,72 +472,132 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
           </div>
         )}
 
-        {/* ================================================================= */}
         {/* TAB 2: TRIAL BALANCE */}
-        {/* ================================================================= */}
         {activeSubTab === 'trial_balance' && (
-          <div className="space-y-4">
-            {/* Equilibrium Banner */}
+          <div className="max-w-6xl mx-auto space-y-4">
+            {/* Audit & Posting Ledger Status Banner */}
+            <div className="bg-white rounded-[8px] border border-[#D9E0E7] p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-2xs">
+              <div className="flex items-center gap-2.5">
+                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${includeDrafts ? 'bg-[#9A6700]' : 'bg-[#237A57]'}`}></span>
+                <div>
+                  <span className="font-semibold text-[#17202A]">
+                    {includeDrafts 
+                      ? `Draft Working Forecast (${journalEntries.length} Total Journals Preview)` 
+                      : `Final General Ledger (${journalEntries.filter(e => e.status === 'posted').length} Posted Transactions)`}
+                  </span>
+                  <p className="text-[11px] text-[#6B7280] mt-0.5">
+                    {journalEntries.filter(e => e.status !== 'posted').length > 0
+                      ? `${journalEntries.filter(e => e.status !== 'posted').length} journal entries are currently in draft / awaiting posting into the permanent general ledger.`
+                      : 'All journal entries are posted to the General Ledger.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-[#F8FAFC] p-0.5 rounded-[6px] border border-[#D9E0E7] text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIncludeDrafts(false);
+                      fetchData(false);
+                    }}
+                    className={`px-3 py-1 rounded-[4px] font-semibold transition-colors ${
+                      !includeDrafts 
+                        ? 'bg-[#1F5D8F] text-white shadow-2xs' 
+                        : 'text-[#6B7280] hover:text-[#17202A]'
+                    }`}
+                  >
+                    Posted Only ({journalEntries.filter(e => e.status === 'posted').length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIncludeDrafts(true);
+                      fetchData(true);
+                    }}
+                    className={`px-3 py-1 rounded-[4px] font-semibold transition-colors ${
+                      includeDrafts 
+                        ? 'bg-[#1F5D8F] text-white shadow-2xs' 
+                        : 'text-[#6B7280] hover:text-[#17202A]'
+                    }`}
+                  >
+                    All Journals Preview ({journalEntries.length})
+                  </button>
+                </div>
+
+                {journalEntries.filter(e => e.status !== 'posted').length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handlePostAll}
+                    disabled={actionLoading === 'post_all'}
+                    className="px-3.5 py-1.5 bg-[#237A57] hover:bg-[#1B5E43] text-white rounded-[6px] text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
+                    title="Batch post all balanced journal entries to the permanent General Ledger"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>{actionLoading === 'post_all' ? 'Posting...' : `Post All (${journalEntries.filter(e => e.status !== 'posted').length}) to Ledger`}</span>
+                  </button>
+                )}
+              </div>
+            </div>
             {trialBalance && (
-              <div className={`p-4 rounded-xl border flex items-center justify-between ${
+              <div className={`p-4 rounded-[8px] border flex items-center justify-between ${
                 trialBalance.is_balanced
-                  ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-300'
-                  : 'bg-rose-950/20 border-rose-500/30 text-rose-300'
+                  ? 'bg-[#E8F5EE] border-[#A8D8C1] text-[#237A57]'
+                  : 'bg-[#FDECEC] border-[#E8AAAA] text-[#B33A3A]'
               }`}>
                 <div className="flex items-center gap-3">
                   {trialBalance.is_balanced ? (
-                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                    <CheckCircle2 className="w-5 h-5 text-[#237A57]" />
                   ) : (
-                    <AlertCircle className="w-5 h-5 text-rose-400" />
+                    <AlertCircle className="w-5 h-5 text-[#B33A3A]" />
                   )}
                   <div>
                     <h3 className="text-xs font-bold uppercase tracking-wider">
                       {trialBalance.is_balanced ? 'Trial Balance In Equilibrium' : 'Trial Balance Variance Detected'}
                     </h3>
-                    <p className="text-[11px] text-slate-400">
+                    <p className="text-[11px] text-[#4B5563] mt-0.5">
                       Total Debit: ₹{trialBalance.total_debit} = Total Credit: ₹{trialBalance.total_credit}
                     </p>
                   </div>
                 </div>
-                <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                <span className="px-3 py-1 rounded-full text-xs font-bold bg-white text-[#237A57] border border-[#A8D8C1]">
                   MATHEMATICALLY BALANCED
                 </span>
               </div>
             )}
 
-            {/* Trial Balance Table */}
-            <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+            <div className="bg-white border border-[#D9E0E7] rounded-[8px] overflow-hidden shadow-xs">
               <table className="w-full text-xs text-left">
-                <thead className="bg-slate-900 border-b border-slate-800 text-slate-400">
-                  <tr>
-                    <th className="py-2.5 px-4 font-semibold">Account Code</th>
-                    <th className="py-2.5 px-4 font-semibold">Account Title</th>
-                    <th className="py-2.5 px-4 font-semibold">Classification</th>
-                    <th className="py-2.5 px-4 font-semibold text-right">Debit Balance (₹)</th>
-                    <th className="py-2.5 px-4 font-semibold text-right">Credit Balance (₹)</th>
+                <thead className="bg-[#F8FAFC] border-b border-[#D9E0E7] text-[#4B5563]">
+                  <tr className="font-semibold text-[11px]">
+                    <th className="py-2.5 px-4">Account Code</th>
+                    <th className="py-2.5 px-4">Account Title</th>
+                    <th className="py-2.5 px-4">Classification</th>
+                    <th className="py-2.5 px-4 text-right">Debit Balance (₹)</th>
+                    <th className="py-2.5 px-4 text-right">Credit Balance (₹)</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800/60 font-mono">
+                <tbody className="divide-y divide-[#D9E0E7] font-mono">
                   {trialBalance?.rows.map((r, idx) => (
-                    <tr key={idx} className="hover:bg-slate-900/40">
-                      <td className="py-2.5 px-4 text-indigo-400 font-bold">{r.account_code}</td>
-                      <td className="py-2.5 px-4 text-slate-200 font-sans font-medium">{r.account_name}</td>
-                      <td className="py-2.5 px-4 text-slate-400 uppercase text-[10px] font-sans tracking-wider">{r.category}</td>
-                      <td className="py-2.5 px-4 text-right text-emerald-400 font-medium">
+                    <tr key={idx} className="hover:bg-[#F8FAFC]">
+                      <td className="py-2.5 px-4 text-[#1F5D8F] font-bold">{r.account_code}</td>
+                      <td className="py-2.5 px-4 text-[#17202A] font-sans font-medium">{r.account_name}</td>
+                      <td className="py-2.5 px-4 text-[#6B7280] uppercase text-[10px] font-sans tracking-wider">{r.category}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums text-[#237A57] font-medium">
                         {r.debit !== '—' ? `₹${r.debit}` : '—'}
                       </td>
-                      <td className="py-2.5 px-4 text-right text-slate-300 font-medium">
+                      <td className="py-2.5 px-4 text-right tabular-nums text-[#17202A] font-medium">
                         {r.credit !== '—' ? `₹${r.credit}` : '—'}
                       </td>
                     </tr>
                   ))}
                 </tbody>
                 {trialBalance && (
-                  <tfoot className="bg-slate-900/90 border-t-2 border-slate-700 font-mono font-bold text-sm">
+                  <tfoot className="bg-[#F8FAFC] border-t-2 border-[#D9E0E7] font-mono font-bold text-sm">
                     <tr>
-                      <td colSpan={3} className="py-3 px-4 text-right font-sans text-slate-300">Sum Total:</td>
-                      <td className="py-3 px-4 text-right text-emerald-400">₹{trialBalance.total_debit}</td>
-                      <td className="py-3 px-4 text-right text-emerald-400">₹{trialBalance.total_credit}</td>
+                      <td colSpan={3} className="py-3 px-4 text-right font-sans text-[#4B5563]">Equilibrium Sum:</td>
+                      <td className="py-3 px-4 text-right tabular-nums text-[#237A57]">₹{trialBalance.total_debit}</td>
+                      <td className="py-3 px-4 text-right tabular-nums text-[#17202A]">₹{trialBalance.total_credit}</td>
                     </tr>
                   </tfoot>
                 )}
@@ -557,144 +606,207 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
           </div>
         )}
 
-        {/* ================================================================= */}
         {/* TAB 3: FINANCIAL STATEMENTS */}
-        {/* ================================================================= */}
         {activeSubTab === 'statements' && finStatements && (
-          <div className="space-y-6">
-            <div className="flex items-center justify-between text-xs text-slate-400 pb-2 border-b border-slate-800">
-              <span className="font-semibold text-slate-300">{finStatements.period}</span>
-              <span className="italic text-amber-400/90">{finStatements.disclaimer}</span>
+          <div className="max-w-6xl mx-auto space-y-6">
+            {/* Audit & Posting Ledger Status Banner */}
+            <div className="bg-white rounded-[8px] border border-[#D9E0E7] p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs shadow-2xs">
+              <div className="flex items-center gap-2.5">
+                <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${includeDrafts ? 'bg-[#9A6700]' : 'bg-[#237A57]'}`}></span>
+                <div>
+                  <span className="font-semibold text-[#17202A]">
+                    {includeDrafts 
+                      ? `Draft Working Forecast (${journalEntries.length} Total Journals Preview)` 
+                      : `Final General Ledger (${journalEntries.filter(e => e.status === 'posted').length} Posted Transactions)`}
+                  </span>
+                  <p className="text-[11px] text-[#6B7280] mt-0.5">
+                    {journalEntries.filter(e => e.status !== 'posted').length > 0
+                      ? `${journalEntries.filter(e => e.status !== 'posted').length} journal entries are in draft. Switch to "All Journals Preview" or click "Post All" to include them in P&L.`
+                      : 'All journal entries are posted to the General Ledger.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <div className="flex items-center bg-[#F8FAFC] p-0.5 rounded-[6px] border border-[#D9E0E7] text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIncludeDrafts(false);
+                      fetchData(false);
+                    }}
+                    className={`px-3 py-1 rounded-[4px] font-semibold transition-colors ${
+                      !includeDrafts 
+                        ? 'bg-[#1F5D8F] text-white shadow-2xs' 
+                        : 'text-[#6B7280] hover:text-[#17202A]'
+                    }`}
+                  >
+                    Posted Only ({journalEntries.filter(e => e.status === 'posted').length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIncludeDrafts(true);
+                      fetchData(true);
+                    }}
+                    className={`px-3 py-1 rounded-[4px] font-semibold transition-colors ${
+                      includeDrafts 
+                        ? 'bg-[#1F5D8F] text-white shadow-2xs' 
+                        : 'text-[#6B7280] hover:text-[#17202A]'
+                    }`}
+                  >
+                    All Journals Preview ({journalEntries.length})
+                  </button>
+                </div>
+
+                {journalEntries.filter(e => e.status !== 'posted').length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handlePostAll}
+                    disabled={actionLoading === 'post_all'}
+                    className="px-3.5 py-1.5 bg-[#237A57] hover:bg-[#1B5E43] text-white rounded-[6px] text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
+                    title="Batch post all balanced journal entries to the permanent General Ledger"
+                  >
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>{actionLoading === 'post_all' ? 'Posting...' : `Post All (${journalEntries.filter(e => e.status !== 'posted').length}) to Ledger`}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between text-xs text-[#6B7280] pb-2 border-b border-[#D9E0E7]">
+              <span className="font-semibold text-[#17202A]">{finStatements.period}</span>
+              <span className="italic text-[#9A6700]">{finStatements.disclaimer}</span>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* 1. Profit & Loss Statement */}
-              <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 text-emerald-400" />
+              {/* Profit & Loss */}
+              <div className="bg-white border border-[#D9E0E7] rounded-[8px] p-5 space-y-4 shadow-xs">
+                <div className="flex items-center justify-between border-b border-[#D9E0E7] pb-3">
+                  <h3 className="text-sm font-bold text-[#17202A] flex items-center gap-2">
+                    <TrendingUp className="w-4 h-4 text-[#237A57]" />
                     <span>Profit & Loss Statement</span>
                   </h3>
-                  <span className="text-xs font-mono font-bold text-emerald-400">
+                  <span className="text-xs font-mono font-bold text-[#237A57]">
                     Net Profit: ₹{finStatements.profit_and_loss.net_profit}
                   </span>
                 </div>
 
                 <div className="space-y-2 text-xs">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Revenue</div>
+                  <div className="text-[11px] font-bold text-[#4B5563] uppercase tracking-wider">Revenue</div>
                   {finStatements.profit_and_loss.revenue_items.map((it, idx) => (
-                    <div key={idx} className="flex justify-between py-1 text-slate-300 font-mono">
+                    <div key={idx} className="flex justify-between py-1 text-[#4B5563] font-mono">
                       <span className="font-sans">{it.name}</span>
-                      <span>₹{it.amount}</span>
+                      <span className="tabular-nums">₹{it.amount}</span>
                     </div>
                   ))}
-                  <div className="flex justify-between py-1 border-t border-slate-800/80 font-bold font-mono text-emerald-400">
+                  <div className="flex justify-between py-1.5 border-t border-[#D9E0E7] font-bold font-mono text-[#237A57]">
                     <span className="font-sans">Total Revenue:</span>
-                    <span>₹{finStatements.profit_and_loss.total_revenue}</span>
+                    <span className="tabular-nums">₹{finStatements.profit_and_loss.total_revenue}</span>
                   </div>
 
-                  <div className="pt-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider">Operating Expenses</div>
+                  <div className="pt-3 text-[11px] font-bold text-[#4B5563] uppercase tracking-wider">Operating Expenses</div>
                   {finStatements.profit_and_loss.expense_items.map((it, idx) => (
-                    <div key={idx} className="flex justify-between py-1 text-slate-300 font-mono">
+                    <div key={idx} className="flex justify-between py-1 text-[#4B5563] font-mono">
                       <span className="font-sans">{it.name}</span>
-                      <span>₹{it.amount}</span>
+                      <span className="tabular-nums">₹{it.amount}</span>
                     </div>
                   ))}
-                  <div className="flex justify-between py-1 border-t border-slate-800/80 font-bold font-mono text-rose-400">
+                  <div className="flex justify-between py-1.5 border-t border-[#D9E0E7] font-bold font-mono text-[#B33A3A]">
                     <span className="font-sans">Total Expenses:</span>
-                    <span>₹{finStatements.profit_and_loss.total_expenses}</span>
+                    <span className="tabular-nums">₹{finStatements.profit_and_loss.total_expenses}</span>
                   </div>
                 </div>
 
-                <div className="p-3 bg-slate-900 rounded-lg flex items-center justify-between font-bold text-xs border border-slate-800">
-                  <span className="text-slate-200">Net Profit / (Loss):</span>
-                  <span className="text-emerald-400 font-mono text-sm">₹{finStatements.profit_and_loss.net_profit}</span>
+                <div className="p-3 bg-[#F8FAFC] rounded-[6px] flex items-center justify-between font-bold text-xs border border-[#D9E0E7]">
+                  <span className="text-[#17202A]">Net Profit / (Loss):</span>
+                  <span className="text-[#237A57] font-mono text-sm tabular-nums">₹{finStatements.profit_and_loss.net_profit}</span>
                 </div>
               </div>
 
-              {/* 2. Balance Sheet */}
-              <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <Scale className="w-4 h-4 text-indigo-400" />
+              {/* Balance Sheet */}
+              <div className="bg-white border border-[#D9E0E7] rounded-[8px] p-5 space-y-4 shadow-xs">
+                <div className="flex items-center justify-between border-b border-[#D9E0E7] pb-3">
+                  <h3 className="text-sm font-bold text-[#17202A] flex items-center gap-2">
+                    <Scale className="w-4 h-4 text-[#1F5D8F]" />
                     <span>Balance Sheet</span>
                   </h3>
-                  <span className="text-xs font-mono font-bold text-indigo-400">
+                  <span className="text-xs font-mono font-bold text-[#1F5D8F]">
                     Assets: ₹{finStatements.balance_sheet.total_assets}
                   </span>
                 </div>
 
                 <div className="space-y-2 text-xs">
-                  <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Assets</div>
+                  <div className="text-[11px] font-bold text-[#4B5563] uppercase tracking-wider">Assets</div>
                   {finStatements.balance_sheet.assets.map((it, idx) => (
-                    <div key={idx} className="flex justify-between py-1 text-slate-300 font-mono">
+                    <div key={idx} className="flex justify-between py-1 text-[#4B5563] font-mono">
                       <span className="font-sans">{it.name}</span>
-                      <span>₹{it.amount}</span>
+                      <span className="tabular-nums">₹{it.amount}</span>
                     </div>
                   ))}
-                  <div className="flex justify-between py-1 border-t border-slate-800/80 font-bold font-mono text-indigo-400">
+                  <div className="flex justify-between py-1.5 border-t border-[#D9E0E7] font-bold font-mono text-[#1F5D8F]">
                     <span className="font-sans">Total Assets:</span>
-                    <span>₹{finStatements.balance_sheet.total_assets}</span>
+                    <span className="tabular-nums">₹{finStatements.balance_sheet.total_assets}</span>
                   </div>
 
-                  <div className="pt-3 text-[11px] font-bold text-slate-400 uppercase tracking-wider">Liabilities & Equity</div>
+                  <div className="pt-3 text-[11px] font-bold text-[#4B5563] uppercase tracking-wider">Liabilities & Equity</div>
                   {finStatements.balance_sheet.liabilities.map((it, idx) => (
-                    <div key={idx} className="flex justify-between py-1 text-slate-300 font-mono">
+                    <div key={idx} className="flex justify-between py-1 text-[#4B5563] font-mono">
                       <span className="font-sans">{it.name}</span>
-                      <span>₹{it.amount}</span>
+                      <span className="tabular-nums">₹{it.amount}</span>
                     </div>
                   ))}
                   {finStatements.balance_sheet.equity.map((it, idx) => (
-                    <div key={idx} className="flex justify-between py-1 text-slate-300 font-mono">
+                    <div key={idx} className="flex justify-between py-1 text-[#4B5563] font-mono">
                       <span className="font-sans">{it.name}</span>
-                      <span>₹{it.amount}</span>
+                      <span className="tabular-nums">₹{it.amount}</span>
                     </div>
                   ))}
-                  <div className="flex justify-between py-1 border-t border-slate-800/80 font-bold font-mono text-indigo-400">
+                  <div className="flex justify-between py-1.5 border-t border-[#D9E0E7] font-bold font-mono text-[#1F5D8F]">
                     <span className="font-sans">Total Liabilities & Equity:</span>
-                    <span>₹{finStatements.balance_sheet.total_liabilities_and_equity}</span>
+                    <span className="tabular-nums">₹{finStatements.balance_sheet.total_liabilities_and_equity}</span>
                   </div>
                 </div>
 
-                <div className="p-3 bg-slate-900 rounded-lg flex items-center justify-between font-bold text-xs border border-slate-800">
-                  <span className="text-slate-200">Equilibrium Check:</span>
-                  <span className="text-emerald-400 font-mono">
+                <div className="p-3 bg-[#F8FAFC] rounded-[6px] flex items-center justify-between font-bold text-xs border border-[#D9E0E7]">
+                  <span className="text-[#17202A]">Equilibrium Check:</span>
+                  <span className="text-[#237A57] font-mono">
                     {finStatements.balance_sheet.is_balanced ? '✓ Assets = Liabilities + Equity' : 'Variance Detected'}
                   </span>
                 </div>
               </div>
             </div>
 
-            {/* 3. GST Summary Position */}
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-5">
-              <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-sky-400" />
+            {/* GST Summary */}
+            <div className="bg-white border border-[#D9E0E7] rounded-[8px] p-5 shadow-xs">
+              <h3 className="text-sm font-bold text-[#17202A] mb-3 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-[#1F5D8F]" />
                 <span>Statutory GST Position Summary</span>
               </h3>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 font-mono text-xs">
-                <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
-                  <span className="text-[11px] font-sans text-slate-400 block mb-1">Input Tax Credit (ITC Available)</span>
-                  <span className="text-base font-bold text-emerald-400">
+                <div className="p-3.5 bg-[#F8FAFC] rounded-[6px] border border-[#D9E0E7]">
+                  <span className="text-[11px] font-sans text-[#6B7280] block mb-1">Input Tax Credit (ITC Available)</span>
+                  <span className="text-base font-bold text-[#237A57] tabular-nums">
                     ₹{finStatements.gst_summary.input_tax_credit.total_itc}
                   </span>
-                  <p className="text-[10px] font-sans text-slate-500 mt-1">Paid on verified vendor purchase bills</p>
+                  <p className="text-[10px] font-sans text-[#9CA3AF] mt-1">Paid on verified vendor purchase bills</p>
                 </div>
 
-                <div className="p-3 bg-slate-900 rounded-lg border border-slate-800">
-                  <span className="text-[11px] font-sans text-slate-400 block mb-1">Output Tax Liability (Collected)</span>
-                  <span className="text-base font-bold text-rose-400">
+                <div className="p-3.5 bg-[#F8FAFC] rounded-[6px] border border-[#D9E0E7]">
+                  <span className="text-[11px] font-sans text-[#6B7280] block mb-1">Output Tax Liability (Collected)</span>
+                  <span className="text-base font-bold text-[#B33A3A] tabular-nums">
                     ₹{finStatements.gst_summary.output_tax_liability.total_output}
                   </span>
-                  <p className="text-[10px] font-sans text-slate-500 mt-1">Collected on client sales invoices</p>
+                  <p className="text-[10px] font-sans text-[#9CA3AF] mt-1">Collected on client sales invoices</p>
                 </div>
 
-                <div className="p-3 bg-indigo-950/30 rounded-lg border border-indigo-500/30">
-                  <span className="text-[11px] font-sans text-indigo-300 block mb-1">Net GST Position</span>
-                  <span className="text-base font-bold text-indigo-200">
+                <div className="p-3.5 bg-[#E8F1F8] rounded-[6px] border border-[#A8C6DC]">
+                  <span className="text-[11px] font-sans text-[#1F5D8F] block mb-1 font-semibold">Net GST Position</span>
+                  <span className="text-base font-bold text-[#1F5D8F] tabular-nums">
                     ₹{finStatements.gst_summary.net_gst_position.net_payable}
                   </span>
-                  <p className="text-[10px] font-sans text-indigo-400 mt-1 font-semibold">
+                  <p className="text-[10px] font-sans text-[#1F5D8F] mt-1 font-semibold">
                     {finStatements.gst_summary.net_gst_position.status}
                   </p>
                 </div>
@@ -703,26 +815,24 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
           </div>
         )}
 
-        {/* ================================================================= */}
         {/* TAB 4: AR & AP AGEING */}
-        {/* ================================================================= */}
         {activeSubTab === 'ar_ap' && arAp && (
-          <div className="space-y-6">
+          <div className="max-w-6xl mx-auto space-y-6">
             {/* Accounts Receivable */}
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-3">
+            <div className="bg-white border border-[#D9E0E7] rounded-[8px] p-5 space-y-3 shadow-xs">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <ArrowDownLeft className="w-4 h-4 text-emerald-400" />
+                <h3 className="text-sm font-bold text-[#17202A] flex items-center gap-2">
+                  <ArrowDownLeft className="w-4 h-4 text-[#237A57]" />
                   <span>Accounts Receivable (Customer Outstandings)</span>
                 </h3>
-                <span className="text-xs font-mono font-bold text-emerald-400">
+                <span className="text-xs font-mono font-bold text-[#237A57] tabular-nums">
                   Total Outstanding: ₹{arAp.accounts_receivable.total_outstanding}
                 </span>
               </div>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left">
-                  <thead className="text-[11px] text-slate-500 border-b border-slate-800">
+                  <thead className="text-[11px] font-semibold text-[#4B5563] border-b border-[#D9E0E7] bg-[#F8FAFC]">
                     <tr>
                       <th className="py-2 px-3">Customer</th>
                       <th className="py-2 px-3">Invoice #</th>
@@ -734,19 +844,19 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
                       <th className="py-2 px-3 text-center">Status</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-900 font-mono">
+                  <tbody className="divide-y divide-[#D9E0E7] font-mono">
                     {arAp.accounts_receivable.items.map((it, idx) => (
-                      <tr key={idx} className="hover:bg-slate-900/40">
-                        <td className="py-2 px-3 font-sans font-medium text-slate-200">{it.customer}</td>
-                        <td className="py-2 px-3 text-indigo-400">{it.invoice_number}</td>
-                        <td className="py-2 px-3 text-slate-400">{it.invoice_date}</td>
-                        <td className="py-2 px-3 text-right text-slate-300">₹{it.total_amount}</td>
-                        <td className="py-2 px-3 text-right text-emerald-400">₹{it.received_amount || '0.00'}</td>
-                        <td className="py-2 px-3 text-right font-bold text-white">₹{it.outstanding_amount}</td>
-                        <td className="py-2 px-3 text-center text-slate-400 text-[11px] font-sans">{it.ageing_bucket}</td>
+                      <tr key={idx} className="hover:bg-[#F8FAFC]">
+                        <td className="py-2 px-3 font-sans font-medium text-[#17202A]">{it.customer}</td>
+                        <td className="py-2 px-3 text-[#1F5D8F]">{it.invoice_number}</td>
+                        <td className="py-2 px-3 text-[#6B7280]">{it.invoice_date}</td>
+                        <td className="py-2 px-3 text-right tabular-nums text-[#4B5563]">₹{it.total_amount}</td>
+                        <td className="py-2 px-3 text-right tabular-nums text-[#237A57]">₹{it.received_amount || '0.00'}</td>
+                        <td className="py-2 px-3 text-right tabular-nums font-bold text-[#17202A]">₹{it.outstanding_amount}</td>
+                        <td className="py-2 px-3 text-center text-[#6B7280] text-[11px] font-sans">{it.ageing_bucket}</td>
                         <td className="py-2 px-3 text-center">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            it.status === 'Paid' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
+                          <span className={`px-2 py-0.5 rounded-[4px] text-[10px] font-bold ${
+                            it.status === 'Paid' ? 'bg-[#E8F5EE] text-[#237A57] border border-[#A8D8C1]' : 'bg-[#FFF5D6] text-[#9A6700] border border-[#E7CA75]'
                           }`}>
                             {it.status}
                           </span>
@@ -759,20 +869,20 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
             </div>
 
             {/* Accounts Payable */}
-            <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-3">
+            <div className="bg-white border border-[#D9E0E7] rounded-[8px] p-5 space-y-3 shadow-xs">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <ArrowUpRight className="w-4 h-4 text-rose-400" />
+                <h3 className="text-sm font-bold text-[#17202A] flex items-center gap-2">
+                  <ArrowUpRight className="w-4 h-4 text-[#B33A3A]" />
                   <span>Accounts Payable (Vendor Liabilities)</span>
                 </h3>
-                <span className="text-xs font-mono font-bold text-rose-400">
+                <span className="text-xs font-mono font-bold text-[#B33A3A] tabular-nums">
                   Total Outstanding: ₹{arAp.accounts_payable.total_outstanding}
                 </span>
               </div>
 
               <div className="overflow-x-auto">
                 <table className="w-full text-xs text-left">
-                  <thead className="text-[11px] text-slate-500 border-b border-slate-800">
+                  <thead className="text-[11px] font-semibold text-[#4B5563] border-b border-[#D9E0E7] bg-[#F8FAFC]">
                     <tr>
                       <th className="py-2 px-3">Vendor</th>
                       <th className="py-2 px-3">Invoice #</th>
@@ -784,19 +894,19 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
                       <th className="py-2 px-3 text-center">Status</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-900 font-mono">
+                  <tbody className="divide-y divide-[#D9E0E7] font-mono">
                     {arAp.accounts_payable.items.map((it, idx) => (
-                      <tr key={idx} className="hover:bg-slate-900/40">
-                        <td className="py-2 px-3 font-sans font-medium text-slate-200">{it.vendor}</td>
-                        <td className="py-2 px-3 text-indigo-400">{it.invoice_number}</td>
-                        <td className="py-2 px-3 text-slate-400">{it.invoice_date}</td>
-                        <td className="py-2 px-3 text-right text-slate-300">₹{it.total_amount}</td>
-                        <td className="py-2 px-3 text-right text-rose-400">₹{it.paid_amount || '0.00'}</td>
-                        <td className="py-2 px-3 text-right font-bold text-white">₹{it.outstanding_amount}</td>
-                        <td className="py-2 px-3 text-center text-slate-400 text-[11px] font-sans">{it.ageing_bucket}</td>
+                      <tr key={idx} className="hover:bg-[#F8FAFC]">
+                        <td className="py-2 px-3 font-sans font-medium text-[#17202A]">{it.vendor}</td>
+                        <td className="py-2 px-3 text-[#1F5D8F]">{it.invoice_number}</td>
+                        <td className="py-2 px-3 text-[#6B7280]">{it.invoice_date}</td>
+                        <td className="py-2 px-3 text-right tabular-nums text-[#4B5563]">₹{it.total_amount}</td>
+                        <td className="py-2 px-3 text-right tabular-nums text-[#B33A3A]">₹{it.paid_amount || '0.00'}</td>
+                        <td className="py-2 px-3 text-right tabular-nums font-bold text-[#17202A]">₹{it.outstanding_amount}</td>
+                        <td className="py-2 px-3 text-center text-[#6B7280] text-[11px] font-sans">{it.ageing_bucket}</td>
                         <td className="py-2 px-3 text-center">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            it.status === 'Paid' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
+                          <span className={`px-2 py-0.5 rounded-[4px] text-[10px] font-bold ${
+                            it.status === 'Paid' ? 'bg-[#E8F5EE] text-[#237A57] border border-[#A8D8C1]' : 'bg-[#FFF5D6] text-[#9A6700] border border-[#E7CA75]'
                           }`}>
                             {it.status}
                           </span>
@@ -810,33 +920,31 @@ export const AccountingWorkspace: React.FC<AccountingWorkspaceProps> = ({ csrfTo
           </div>
         )}
 
-        {/* ================================================================= */}
         {/* TAB 5: CHART OF ACCOUNTS */}
-        {/* ================================================================= */}
         {activeSubTab === 'coa' && (
-          <div className="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white">Configured Chart of Accounts</h3>
-              <span className="text-xs text-slate-400">Standard Indian Accounting & GST Schema</span>
+          <div className="max-w-6xl mx-auto bg-white border border-[#D9E0E7] rounded-[8px] overflow-hidden shadow-xs">
+            <div className="p-4 border-b border-[#D9E0E7] flex items-center justify-between">
+              <h3 className="text-sm font-bold text-[#17202A]">Configured Chart of Accounts</h3>
+              <span className="text-xs text-[#6B7280]">Standard Indian Accounting & GST Schema</span>
             </div>
             <table className="w-full text-xs text-left">
-              <thead className="bg-slate-900 border-b border-slate-800 text-slate-400">
-                <tr>
-                  <th className="py-2.5 px-4 font-semibold">Account Code</th>
-                  <th className="py-2.5 px-4 font-semibold">Account Title</th>
-                  <th className="py-2.5 px-4 font-semibold">Category</th>
-                  <th className="py-2.5 px-4 font-semibold">Normal Balance</th>
-                  <th className="py-2.5 px-4 font-semibold">Description</th>
+              <thead className="bg-[#F8FAFC] border-b border-[#D9E0E7] text-[#4B5563]">
+                <tr className="font-semibold text-[11px]">
+                  <th className="py-2.5 px-4">Account Code</th>
+                  <th className="py-2.5 px-4">Account Title</th>
+                  <th className="py-2.5 px-4">Category</th>
+                  <th className="py-2.5 px-4">Normal Balance</th>
+                  <th className="py-2.5 px-4">Description</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60">
+              <tbody className="divide-y divide-[#D9E0E7]">
                 {accounts.map((a, idx) => (
-                  <tr key={idx} className="hover:bg-slate-900/40">
-                    <td className="py-2.5 px-4 font-mono font-bold text-indigo-400">{a.code}</td>
-                    <td className="py-2.5 px-4 font-medium text-slate-200">{a.name}</td>
-                    <td className="py-2.5 px-4 text-slate-400 uppercase text-[10px] tracking-wider">{a.category}</td>
-                    <td className="py-2.5 px-4 text-slate-300 capitalize font-mono text-[11px]">{a.normal_balance}</td>
-                    <td className="py-2.5 px-4 text-slate-400 text-[11px]">{a.description}</td>
+                  <tr key={idx} className="hover:bg-[#F8FAFC]">
+                    <td className="py-2.5 px-4 font-mono font-bold text-[#1F5D8F]">{a.code}</td>
+                    <td className="py-2.5 px-4 font-medium text-[#17202A]">{a.name}</td>
+                    <td className="py-2.5 px-4 text-[#6B7280] uppercase text-[10px] tracking-wider">{a.category}</td>
+                    <td className="py-2.5 px-4 text-[#17202A] capitalize font-mono text-[11px]">{a.normal_balance}</td>
+                    <td className="py-2.5 px-4 text-[#6B7280] text-[11px]">{a.description}</td>
                   </tr>
                 ))}
               </tbody>

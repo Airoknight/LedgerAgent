@@ -30,6 +30,11 @@ class User(Base, TimestampMixin):
     failed_login_attempts = Column(Integer, default=0, nullable=False)
     locked_until = Column(DateTime, nullable=True)
 
+    # Multi-Factor Authentication (TOTP)
+    mfa_enabled = Column(Boolean, default=False, nullable=False)
+    mfa_secret = Column(String(255), nullable=True)
+    mfa_recovery_codes_json = Column(String(1000), default="[]", nullable=False)
+
     firm = relationship("Firm", back_populates="users")
     organization = relationship("Organization", back_populates="users")
     sessions = relationship("SessionRecord", back_populates="user", cascade="all, delete-orphan")
@@ -40,6 +45,7 @@ class BusinessAccount(Base, TimestampMixin):
     __tablename__ = "business_accounts"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
+    firm_id = Column(String(36), ForeignKey("firms.id"), nullable=True, index=True, default="default_firm")
     organization_id = Column(String(36), ForeignKey("organizations.id"), nullable=True, index=True)
     legal_name = Column(String(255), nullable=False)
     trade_name = Column(String(255), nullable=True)
@@ -48,6 +54,7 @@ class BusinessAccount(Base, TimestampMixin):
     currency = Column(String(3), default="INR", nullable=False)
     financial_year_start = Column(String(10), default="04-01", nullable=False)
 
+    firm = relationship("Firm", back_populates="businesses")
     organization = relationship("Organization", back_populates="businesses")
     documents = relationship("Document", back_populates="business")
     exceptions = relationship("FinancialException", back_populates="business")

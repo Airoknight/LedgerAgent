@@ -72,12 +72,13 @@ def handle_chat_query(payload: ChatQueryRequest, db: Session = Depends(get_db)):
                     suggested_actions=["[Correct Field]", "[Accept Variance]", "[Ask Client]"]
                 )
 
-    # Grounded Query over all uploaded documents using Nvidia Nemotron 3 Ultra 550B
-
+    # Grounded Query over all uploaded documents using Nvidia Nemotron 3 Ultra 550B & Retrieval Engine
     grounded_context = build_grounded_ledger_context(db, active_doc_id=doc_id)
     answer, model_used = query_nemotron_openrouter(
         user_query=query,
-        grounded_context=grounded_context
+        grounded_context=grounded_context,
+        conversation_history=payload.history,
+        db=db
     )
 
     docs_count = db.query(Document).count()
@@ -87,12 +88,22 @@ def handle_chat_query(payload: ChatQueryRequest, db: Session = Depends(get_db)):
         if active_doc:
             context_desc += f" (Focused: {active_doc.original_filename})"
 
+    # Generate helpful context-aware suggestions
+    suggested_actions = ["Summarize sales", "Verify tax calculations", "Check current bills"]
+    if "abc traders" in query.lower():
+        suggested_actions = ["Inspect valid_invoice_1d12d0ec.pdf", "View ABC Traders in General Ledger", "Export ABC Invoices"]
+    elif "durga" in query.lower() or "purchase" in query.lower():
+        suggested_actions = ["Inspect Purchase Order #60421", "View Dry Fruits Inventory", "Post to Accounts Payable"]
+    elif "duplicate" in query.lower():
+        suggested_actions = ["View Duplicate Audit Findings", "Inspect Flagged Documents", "Resolve Duplicates"]
+
     return ChatQueryResponse(
         answer=answer,
         context_used=context_desc,
         action_type="text",
         model_used=model_used,
-        suggested_actions=["Summarize sales", "Verify tax calculations", "Check current bills"]
+        suggested_actions=suggested_actions
     )
+
 
 

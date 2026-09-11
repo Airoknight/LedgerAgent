@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'LedgerAgent | Accounting Assistant',
-  description: 'AI-Powered Accounting Operations & Workflow Automation Studio for Chartered Accountants',
+  title: 'LedgerAgent | Professional Accounting Workspace',
+  description: 'Financial Operations & Workflow Automation Platform for Chartered Accountants',
 };
 
 export default function RootLayout({
@@ -14,25 +14,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
-        <link rel="stylesheet" href="/globals.css" />
-        <script src="https://cdn.tailwindcss.com"></script>
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              tailwind.config = {
-                theme: {
-                  extend: {
-                    colors: {
-                      brand: '#2563eb',
-                    }
-                  }
-                }
-              }
-            `,
-          }}
-        />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
       </head>
-      <body className="bg-[#f8f9fb] text-slate-800 antialiased min-h-screen">
+      <body className="bg-[#F5F7FA] text-[#17202A] antialiased min-h-screen font-sans">
         {children}
       </body>
     </html>

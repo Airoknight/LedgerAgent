@@ -60,3 +60,54 @@ def get_close_readiness_checklist(db: Session = Depends(get_db)):
         "checklist": checklist
     }
 
+import io
+import csv
+from fastapi.responses import StreamingResponse
+from app.services.upload_guard import sanitize_formula_injection
+
+@router.get("/export/csv")
+def export_financial_register_csv(
+    category: str = "invoices",
+    db: Session = Depends(get_db)
+):
+    """
+    Exports normalized financial registers to CSV.
+    Strictly sanitizes every field against CSV formula injection (DDE/CWE-1236).
+    """
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header
+    writer.writerow([
+        "Document ID", "Filename", "Category", "Status", "Review Status",
+        "Party Name", "Identifier", "Date", "Subtotal", "Tax Total", "Total"
+    ])
+
+    docs = db.query(Document).all()
+    for doc in docs:
+        data = doc.extracted_data or {}
+        row = [
+            doc.id,
+            sanitize_formula_injection(doc.original_filename),
+            sanitize_formula_injection(doc.document_type),
+            sanitize_formula_injection(doc.status),
+            sanitize_formula_injection(doc.review_status),
+            sanitize_formula_injection(data.get("vendor_name") or data.get("party_name") or ""),
+            sanitize_formula_injection(data.get("invoice_number") or data.get("identifier") or ""),
+            sanitize_formula_injection(data.get("invoice_date") or data.get("date") or ""),
+            sanitize_formula_injection(str(data.get("subtotal") or 0.0)),
+            sanitize_formula_injection(str(data.get("tax_total") or data.get("tax") or 0.0)),
+            sanitize_formula_injection(str(data.get("grand_total") or data.get("total") or 0.0))
+        ]
+        writer.writerow(row)
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f"attachment; filename=financial_export_{category}.csv",
+            "X-Content-Type-Options": "nosniff"
+        }
+    )
+
